@@ -213,3 +213,81 @@ class PermissionHandler:
             return user_rank >= PermissionHandler.ROLE_HIERARCHY["support_manager"]
 
         return False
+
+    @staticmethod
+    async def set_ticket_visibility(channel: discord.TextChannel, guild: discord.Guild, ticket: dict, is_hidden: bool):
+        guild_id = guild.id
+        settings = db.get_guild_settings(guild_id) or {}
+        ticket_user_id = ticket.get("user_id")
+        claimed_by = ticket.get("claimed_by")
+        category_id = ticket.get("category_id")
+        panel_id = ticket.get("panel_id")
+
+        cat_support_roles = []
+        if panel_id:
+            panel = db.get_panel_by_id(panel_id)
+            if panel and panel.get("categories"):
+                for cat in panel.get("categories", []):
+                    if str(cat.get("id")) == str(category_id):
+                        cat_support_roles = cat.get("support_role_ids", [])
+                        break
+
+        staff_role_ids = set()
+        for r_key in ["support_role_id", "senior_support_role_id", "admin_role_id", "support_manager_role_id", "owner_role_id"]:
+            val = settings.get(r_key)
+            if val and str(val).isdigit():
+                staff_role_ids.add(int(val))
+        for r_id in cat_support_roles:
+            if r_id and str(r_id).isdigit():
+                staff_role_ids.add(int(r_id))
+
+        overwrites = channel.overwrites.copy()
+
+        # Default role (@everyone)
+        overwrites[guild.default_role] = discord.PermissionOverwrite(view_channel=False, read_messages=False)
+
+        # Handle management / staff roles
+        for role_id in staff_role_ids:
+            role = guild.get_role(role_id)
+            if role:
+                if is_hidden:
+                    # Hide: Management roles cannot view the channel
+                    overwrites[role] = discord.PermissionOverwrite(view_channel=False, read_messages=False)
+                else:
+                    # Show: Restore visibility to management roles, BUT read-only (without send_messages)
+                    overwrites[role] = discord.PermissionOverwrite(view_channel=True, read_messages=True, send_messages=False)
+
+        # Ticket owner (صاحب التذكرة)
+        owner = guild.get_member(ticket_user_id) if ticket_user_id else None
+        if not owner and ticket_user_id:
+            try:
+                owner = await guild.fetch_member(ticket_user_id)
+            except Exception:
+                owner = None
+        if owner:
+            can_send = True if ticket.get("status") in ["open", "claimed"] else False
+            overwrites[owner] = discord.PermissionOverwrite(view_channel=True, read_messages=True, send_messages=can_send, attach_files=can_send, embed_links=can_send)
+
+        # Claimed staff member (مستلم التذكرة)
+        if claimed_by:
+            claimed_member = guild.get_member(claimed_by)
+            if not claimed_member:
+                try:
+                    claimed_member = await guild.fetch_member(claimed_by)
+                except Exception:
+                    claimed_member = None
+            if claimed_member:
+                overwrites[claimed_member] = discord.PermissionOverwrite(
+                    view_channel=True, read_messages=True, send_messages=True, attach_files=True, embed_links=True, manage_messages=True
+                )
+
+        # Bot
+        bot_member = guild.me
+        if bot_member:
+            overwrites[bot_member] = discord.PermissionOverwrite(
+                view_channel=True, read_messages=True, send_messages=True, manage_channels=True, manage_messages=True, attach_files=True, embed_links=True
+            )
+
+        await channel.edit(overwrites=overwrites)
+        db.update_ticket_hidden(channel.id, 1 if is_hidden else 0)
+

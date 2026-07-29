@@ -319,6 +319,8 @@ class DatabaseManager:
                         query += " ON CONFLICT (guild_id) DO NOTHING"
                     elif "blacklist" in query:
                         query += " ON CONFLICT (user_id) DO NOTHING"
+                    elif "staff_stats" in query:
+                        query += " ON CONFLICT (guild_id, user_id) DO NOTHING"
                 elif "INSERT OR REPLACE" in query:
                     query = query.replace("INSERT OR REPLACE INTO", "INSERT INTO")
                     if "guild_settings" in query:

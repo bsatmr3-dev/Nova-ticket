@@ -1,3 +1,4 @@
+import re
 import discord
 from discord.ui import View, Button, Select, Modal, TextInput
 import io
@@ -80,86 +81,92 @@ class QuickSetupPanelModal(Modal):
         self.add_item(self.image_url)
 
     async def on_submit(self, interaction: discord.Interaction):
-        if not check_master_permission(interaction):
-            return await send_no_perm(interaction)
+        try:
+            if not check_master_permission(interaction):
+                return await send_no_perm(interaction)
 
-        channel = interaction.guild.get_channel(self.target_channel_id) or interaction.channel
-        if not channel:
-            return await interaction.response.send_message("❌ القناة المحددة غير صالحة.", ephemeral=True)
+            channel = interaction.guild.get_channel(self.target_channel_id) or interaction.channel
+            if not channel:
+                return await interaction.response.send_message("❌ القناة المحددة غير صالحة.", ephemeral=True)
 
-        # Parse questions
-        raw_questions = [q.strip() for q in self.questions_input.value.strip().split("\n") if q.strip()]
-        formatted_questions = []
-        for idx, q_label in enumerate(raw_questions[:5]):
-            style_type = "paragraph" if idx == 1 else "short"
-            formatted_questions.append({
-                "label": q_label[:45],
-                "placeholder": "أدخل الإجابة هنا...",
-                "style": style_type,
-                "required": True if idx == 0 else False
-            })
+            # Parse questions
+            raw_questions = [q.strip() for q in self.questions_input.value.strip().split("\n") if q.strip()]
+            formatted_questions = []
+            for idx, q_label in enumerate(raw_questions[:5]):
+                style_type = "paragraph" if idx == 1 else "short"
+                formatted_questions.append({
+                    "label": q_label[:45],
+                    "placeholder": "أدخل الإجابة هنا...",
+                    "style": style_type,
+                    "required": True if idx == 0 else False
+                })
 
-        # Parse categories
-        raw_cats = [c.strip() for c in self.categories_input.value.strip().split("\n") if c.strip()]
-        categories = []
-        for idx, line in enumerate(raw_cats[:20], 1):
-            # Extract potential emoji from start of line
-            emoji_match = re.match(r'^([^\w\s\d]+)\s*(.*)', line, re.UNICODE)
-            if emoji_match:
-                cat_emoji = emoji_match.group(1).strip()
-                cat_name = emoji_match.group(2).strip() or f"قسم {idx}"
+            # Parse categories
+            raw_cats = [c.strip() for c in self.categories_input.value.strip().split("\n") if c.strip()]
+            categories = []
+            for idx, line in enumerate(raw_cats[:20], 1):
+                # Extract potential emoji from start of line
+                emoji_match = re.match(r'^([^\w\s\d]+)\s*(.*)', line, re.UNICODE)
+                if emoji_match:
+                    cat_emoji = emoji_match.group(1).strip()
+                    cat_name = emoji_match.group(2).strip() or f"قسم {idx}"
+                else:
+                    cat_emoji = "🎫"
+                    cat_name = line
+
+                categories.append({
+                    "id": f"cat_{idx}",
+                    "name": cat_name,
+                    "emoji": cat_emoji,
+                    "description": f"انقر هنا لفتح تذكرة في قسم {cat_name}",
+                    "questions": formatted_questions
+                })
+
+            if not categories:
+                categories = [{
+                    "id": "cat_1",
+                    "name": "دعم عام",
+                    "emoji": "💬",
+                    "description": "تذكرة دعم عام",
+                    "questions": formatted_questions
+                }]
+
+            img = self.image_url.value.strip() or None
+
+            panel_id = db.save_panel(
+                title=self.panel_title.value.strip(),
+                description=self.panel_desc.value.strip(),
+                color=EmbedBuilder.COLOR_PRIMARY,
+                categories=categories,
+                channel_id=channel.id,
+                image_url=img
+            )
+
+            embed = EmbedBuilder.panel_embed(
+                title=self.panel_title.value.strip(),
+                description=self.panel_desc.value.strip(),
+                color=EmbedBuilder.COLOR_PRIMARY,
+                guild=interaction.guild,
+                image_url=img,
+                categories=categories
+            )
+
+            view = PanelView(categories=categories, panel_id=panel_id)
+            msg = await channel.send(embed=embed, view=view)
+            db.update_panel_message_id(panel_id, msg.id)
+
+            await interaction.response.send_message(
+                f"✅ **تم نشر لوحة التذاكر بنجاح مع الأسئلة التفاعلية في القناة {channel.mention}!**\n"
+                f"• عدد الأقسام المجهزة: `{len(categories)}`\n"
+                f"• عدد الأسئلة التفاعلية لكل قسم: `{len(formatted_questions)}`\n"
+                f"• معرف اللوحة: `{panel_id}`",
+                ephemeral=True
+            )
+        except Exception as e:
+            if not interaction.response.is_done():
+                await interaction.response.send_message(f"❌ حدث خطأ أثناء إنشاء اللوحة: {e}", ephemeral=True)
             else:
-                cat_emoji = "🎫"
-                cat_name = line
-
-            categories.append({
-                "id": f"cat_{idx}",
-                "name": cat_name,
-                "emoji": cat_emoji,
-                "description": f"انقر هنا لفتح تذكرة في قسم {cat_name}",
-                "questions": formatted_questions
-            })
-
-        if not categories:
-            categories = [{
-                "id": "cat_1",
-                "name": "دعم عام",
-                "emoji": "💬",
-                "description": "تذكرة دعم عام",
-                "questions": formatted_questions
-            }]
-
-        img = self.image_url.value.strip() or None
-
-        panel_id = db.save_panel(
-            title=self.panel_title.value.strip(),
-            description=self.panel_desc.value.strip(),
-            color=EmbedBuilder.COLOR_PRIMARY,
-            categories=categories,
-            channel_id=channel.id,
-            image_url=img
-        )
-
-        embed = EmbedBuilder.panel_embed(
-            title=self.panel_title.value.strip(),
-            description=self.panel_desc.value.strip(),
-            color=EmbedBuilder.COLOR_PRIMARY,
-            guild=interaction.guild,
-            image_url=img,
-            categories=categories
-        )
-
-        view = PanelView(categories=categories, panel_id=panel_id)
-        msg = await channel.send(embed=embed, view=view)
-        db.update_panel_message_id(panel_id, msg.id)
-
-        await interaction.response.send_message(
-            f"✅ **تم نشر لوحة التذاكر بنجاح مع الأسئلة التفاعلية في القناة {channel.mention}!**\n"
-            f"• عدد الأقسام المجهزة: `{len(categories)}`\n"
-            f"• عدد الأسئلة التفاعلية لكل قسم: `{len(formatted_questions)}`\n"
-            f"• معرف اللوحة: `{panel_id}`",
-            ephemeral=True
-        )
+                await interaction.followup.send(f"❌ حدث خطأ أثناء إنشاء اللوحة: {e}", ephemeral=True)
 
 
 class BlacklistModal(Modal):

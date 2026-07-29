@@ -148,19 +148,48 @@ class TicketActionBase(Select):
 
         elif action == "close":
             db.update_ticket_status(interaction.channel_id, "closed")
-            owner = guild.get_member(ticket_user_id)
-            if owner: await interaction.channel.set_permissions(owner, view_channel=True, send_messages=False)
+            owner = guild.get_member(ticket_user_id) if ticket_user_id else None
+            if not owner and ticket_user_id:
+                try:
+                    owner = await guild.fetch_member(ticket_user_id)
+                except Exception:
+                    try:
+                        owner = await interaction.client.fetch_user(ticket_user_id)
+                    except Exception:
+                        owner = None
+
+            if owner and isinstance(owner, discord.Member):
+                await interaction.channel.set_permissions(owner, view_channel=True, send_messages=False)
+
             await interaction.followup.send(embed=EmbedBuilder.create_embed(title="🔒 تم إغلاق التذكرة", description=f"أغلقت التذكرة بواسطة {member.mention}.", color=EmbedBuilder.COLOR_DANGER))
             await TicketLogger.log_action(guild, ticket, "إغلاق التذكرة", member)
-            
-            # Send rating view to owner if configured
-            if owner:
+
+            # Send rating view to ticket owner if ticket was claimed
+            staff_id = ticket.get("claimed_by")
+            if owner and staff_id:
                 from bot.views.rating_view import RatingView
                 try:
-                    staff_id = ticket.get("claimed_by")
-                    if staff_id:
-                        await owner.send(embed=EmbedBuilder.create_embed(title="⭐ تقييم الخدمة", description="نرجو منك تقييم تجربة الدعم الفني الخاصة بك."), view=RatingView(ticket['id'], staff_id, self.lang))
-                except: pass
+                    staff_member = guild.get_member(staff_id)
+                    if not staff_member:
+                        try:
+                            staff_member = await guild.fetch_member(staff_id)
+                        except Exception:
+                            staff_member = None
+                    staff_mention = staff_member.mention if staff_member else f"<@{staff_id}>"
+
+                    rating_embed = EmbedBuilder.create_embed(
+                        title="⭐ تقييم خدمة الدعم الفني",
+                        description=(
+                            f"مرحباً <@{ticket_user_id}> 👋،\n"
+                            f"تم إغلاق تذكرتك بنجاح في سيرفر **{guild.name}**.\n\n"
+                            f"👤 **مستلم التذكرة:** {staff_mention}\n\n"
+                            f"يرجى تقييم أداء الموظف وجودة الخدمة التي تلقيتها بالضغط على الأزرار أدناه (1 إلى 5 نجوم):"
+                        ),
+                        color=EmbedBuilder.COLOR_PRIMARY
+                    )
+                    await owner.send(embed=rating_embed, view=RatingView(ticket['id'], staff_id, self.lang))
+                except Exception as e:
+                    print(f"Error sending rating DM to owner: {e}")
 
         elif action == "summon_staff":
             settings = db.get_guild_settings(guild.id) or {}
@@ -212,30 +241,8 @@ class TicketActionBase(Select):
         elif action == "toggle_hide":
             is_hidden = ticket.get("is_hidden", 0)
             new_hidden = 0 if is_hidden else 1
-            db.update_ticket_hidden(interaction.channel_id, new_hidden)
-            
-            claimed_id, owner_id = ticket.get("claimed_by"), ticket.get("user_id")
-            overwrites, settings = interaction.channel.overwrites, db.get_guild_settings(guild.id) or {}
-            staff_roles = [settings.get("support_role_id"), settings.get("senior_support_role_id"), settings.get("admin_role_id"), settings.get("support_manager_role_id"), settings.get("owner_role_id")]
-            
-            for r_id in staff_roles:
-                if r_id:
-                    role = guild.get_role(int(r_id))
-                    if role:
-                        if new_hidden:
-                            overwrites[role] = discord.PermissionOverwrite(view_channel=False)
-                        else:
-                            overwrites[role] = discord.PermissionOverwrite(view_channel=True, send_messages=False)
-            
-            owner = guild.get_member(owner_id)
-            if owner: overwrites[owner] = discord.PermissionOverwrite(view_channel=True, send_messages=True if ticket.get("status") == "open" else False)
-            
-            if claimed_id:
-                claimed = guild.get_member(claimed_id)
-                if claimed: overwrites[claimed] = discord.PermissionOverwrite(view_channel=True, send_messages=True, manage_messages=True)
-            
-            await interaction.channel.edit(overwrites=overwrites)
-            status_text = "مخفية (فقط المستلم وصاحب التذكرة)" if new_hidden else "مرئية لكافة الطاقم (مشاهدة فقط)"
+            await PermissionHandler.set_ticket_visibility(interaction.channel, guild, ticket, is_hidden=bool(new_hidden))
+            status_text = "مخفية (فقط المستلم وصاحب التذكرة)" if new_hidden else "مرئية لكافة الطاقم (مشاهدة فقط بدون كتابة)"
             await interaction.followup.send(f"✅ تم تغيير حالة التذكرة إلى: **{status_text}**", ephemeral=True)
 
         elif action == "lock":
