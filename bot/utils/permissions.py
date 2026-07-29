@@ -110,15 +110,46 @@ class PermissionHandler:
 
     @staticmethod
     def can_execute_action(guild: discord.Guild, member: discord.Member, action_name: str, ticket_user_id: int = None, ticket_data: dict = None) -> bool:
+        if not member:
+            return False
+
         # Master owner bypass
         if PermissionHandler.is_bot_owner(member.id):
             return True
 
-        # 1. Administrator & Guild Owner bypass
+        # Special logic for rate_staff: STRICTLY for ticket owner, staff CANNOT rate themselves
+        if action_name == "rate_staff":
+            if not ticket_user_id or member.id != ticket_user_id:
+                return False
+            claimed_by = ticket_data.get("claimed_by") if ticket_data else None
+            if claimed_by and member.id == claimed_by:
+                return False
+            if PermissionHandler.is_staff(member) and member.id != ticket_user_id:
+                return False
+            return True
+
+        # Administrator & Guild Owner bypass
         if guild and (member.id == guild.owner_id or member.guild_permissions.administrator):
             return True
 
-        # 2. Check category-specific roles if ticket_data is provided
+        # Member-only / All-user allowed actions (for the ticket owner)
+        if action_name in ["info", "summon_staff"]:
+            return True
+
+        if action_name == "close":
+            if ticket_user_id and member.id == ticket_user_id:
+                return True
+
+        if action_name in ["add_member", "remove_member"]:
+            if ticket_user_id and member.id == ticket_user_id:
+                return True
+
+        # All staff/administration actions require the user to actually be staff or have staff rank
+        is_user_staff = PermissionHandler.is_staff(member)
+        if not is_user_staff:
+            return False
+
+        # Category-specific roles check if ticket_data is provided
         if ticket_data and guild:
             panel_id = ticket_data.get("panel_id")
             category_id = ticket_data.get("category_id")
@@ -136,76 +167,40 @@ class PermissionHandler:
                                 return True
                             break
 
-        # 3. Check DB dynamic action permissions if configured
+        # DB dynamic action permissions
         if guild:
             perm = db.get_action_permission(guild.id, action_name)
             if perm:
                 allowed_roles = perm.get("allowed_roles", [])
                 min_rank = perm.get("min_rank", 10)
                 
-                # Role check
                 if allowed_roles:
                     user_role_ids = [r.id for r in member.roles]
                     if any(rid in user_role_ids for rid in allowed_roles):
                         return True
 
-                # Rank check
                 user_rank = PermissionHandler.get_member_rank(member)
                 if user_rank >= min_rank:
                     return True
-                
-                # If custom permissions are configured and user failed both role and rank checks
                 return False
 
-        # 3. Default fallback checks if no custom DB rule is explicitly defined
+        # Default hierarchy checks
         user_rank = PermissionHandler.get_member_rank(member)
-
-        # Public / All-User actions
-        if action_name in ["info", "rate_staff", "summon_staff"]:
-            return True
-
-        # Close action: ticket owner or staff
-        if action_name == "close":
-            if ticket_user_id and member.id == ticket_user_id:
-                return True
-            claimed_by = ticket_data.get("claimed_by") if ticket_data else None
-            if not claimed_by:
-                return False
-            if claimed_by and member.id != claimed_by:
-                if user_rank < PermissionHandler.ROLE_HIERARCHY["admin"]:
-                    return False
-            return user_rank >= PermissionHandler.ROLE_HIERARCHY["support"]
-
-        # Add/Remove Member actions: ticket owner or staff
-        if action_name in ["add_member", "remove_member"]:
-            if ticket_user_id and member.id == ticket_user_id:
-                return True
-            claimed_by = ticket_data.get("claimed_by") if ticket_data else None
-            if not claimed_by:
-                return False
-            if claimed_by and member.id != claimed_by:
-                if user_rank < PermissionHandler.ROLE_HIERARCHY["admin"]:
-                    return False
-            return user_rank >= PermissionHandler.ROLE_HIERARCHY["support"]
 
         # Staff actions
         if action_name in [
             "claim", "unclaim", "transfer", "priority", "rename", "department",
-            "lock", "unlock", "hold", "resume", "summon_member",
+            "lock", "unlock", "hold", "resume", "hold_resume", "toggle_hold", "summon_member",
             "add_note", "pin_ticket", "generate_transcript", "export_transcript",
-            "reopen", "audit_log", "toggle_hide"
+            "reopen", "audit_log", "toggle_hide", "restart"
         ]:
             claimed_by = ticket_data.get("claimed_by") if ticket_data else None
-            
-            # Non-claim actions require the ticket to be claimed first
             if action_name != "claim" and not claimed_by:
-                return False
-                
-            if claimed_by and member.id != claimed_by:
-                # Bypass for admins and managers
                 if user_rank < PermissionHandler.ROLE_HIERARCHY["admin"]:
                     return False
-            
+            if claimed_by and member.id != claimed_by:
+                if user_rank < PermissionHandler.ROLE_HIERARCHY["admin"]:
+                    return False
             return user_rank >= PermissionHandler.ROLE_HIERARCHY["support"]
 
         # High-privilege Admin actions

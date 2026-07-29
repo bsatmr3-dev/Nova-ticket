@@ -32,23 +32,27 @@ class TicketManagementCog(commands.Cog):
             return False
 
         # 3. Check claim state for administrative actions
-        administration_actions = [
+        staff_actions = [
             "unclaim", "transfer", "toggle_hide", "department", "priority",
             "lock", "unlock", "hold", "resume", "note", "delete_ticket",
-            "close", "add_member", "remove_member", "rename", "summon_member",
+            "add_member", "remove_member", "rename", "summon_member",
             "hide", "show"
         ]
         
-        if action in administration_actions:
-            # If not claimed, and the action-taker is not the ticket owner (who can close their own ticket)
-            if not claimed_by and member.id != ticket_user_id:
-                await interaction.response.send_message("⚠️ يجب استلام التذكرة أولاً لتتمكن من استخدام أوامر الإدارة عليها!", ephemeral=True)
+        if action in staff_actions:
+            if not PermissionHandler.is_staff(member) and not PermissionHandler.is_bot_owner(member.id):
+                await interaction.response.send_message("❌ هذا الأمر مخصص فقط لإدارة وطاقم الدعم الفني.", ephemeral=True)
                 return False
-                
-            # If claimed, check if the action-taker is the claimant, the owner, or an administrator
-            user_rank = PermissionHandler.get_member_rank(member)
-            if claimed_by and member.id != claimed_by and member.id != ticket_user_id:
-                if user_rank < PermissionHandler.ROLE_HIERARCHY["admin"]:
+
+            if not claimed_by and action not in ["close", "hide", "show"]:
+                user_rank = PermissionHandler.get_member_rank(member)
+                if user_rank < PermissionHandler.ROLE_HIERARCHY["admin"] and not PermissionHandler.is_bot_owner(member.id):
+                    await interaction.response.send_message("⚠️ يجب استلام التذكرة أولاً لتتمكن من استخدام أوامر الإدارة عليها!", ephemeral=True)
+                    return False
+
+            if claimed_by and member.id != claimed_by:
+                user_rank = PermissionHandler.get_member_rank(member)
+                if user_rank < PermissionHandler.ROLE_HIERARCHY["admin"] and not PermissionHandler.is_bot_owner(member.id):
                     await interaction.response.send_message("❌ هذه التذكرة مستلمة من قبل موظف آخر، ولا يمكنك إدارتها إلا إذا كنت مسؤولاً.", ephemeral=True)
                     return False
 
@@ -270,8 +274,14 @@ class TicketManagementCog(commands.Cog):
         if not await self.check_ticket_state(interaction, ticket, "hold"):
             return
 
-        owner = interaction.guild.get_member(ticket["user_id"])
-        if owner: await interaction.channel.set_permissions(owner, view_channel=True, send_messages=False)
+        ticket_user_id = ticket.get("user_id")
+        owner = interaction.guild.get_member(ticket_user_id) if ticket_user_id else None
+        if not owner and ticket_user_id:
+            try: owner = await interaction.guild.fetch_member(ticket_user_id)
+            except Exception: owner = None
+
+        if owner:
+            await interaction.channel.set_permissions(owner, view_channel=True, send_messages=False)
         db.update_ticket_status(interaction.channel_id, "on_hold")
         
         await interaction.response.send_message(embed=EmbedBuilder.create_embed(title="⏸️ تم تعليق التذكرة", description="صاحب التذكرة قادر على الرؤية فقط الآن.", color=EmbedBuilder.COLOR_WARNING))
@@ -284,11 +294,18 @@ class TicketManagementCog(commands.Cog):
         if not await self.check_ticket_state(interaction, ticket, "resume"):
             return
 
-        owner = interaction.guild.get_member(ticket["user_id"])
-        if owner: await interaction.channel.set_permissions(owner, view_channel=True, send_messages=True)
-        db.update_ticket_status(interaction.channel_id, "open")
+        ticket_user_id = ticket.get("user_id")
+        owner = interaction.guild.get_member(ticket_user_id) if ticket_user_id else None
+        if not owner and ticket_user_id:
+            try: owner = await interaction.guild.fetch_member(ticket_user_id)
+            except Exception: owner = None
+
+        if owner:
+            await interaction.channel.set_permissions(owner, view_channel=True, send_messages=True)
+        new_st = "claimed" if ticket.get("claimed_by") else "open"
+        db.update_ticket_status(interaction.channel_id, new_st)
         
-        await interaction.response.send_message(embed=EmbedBuilder.create_embed(title="▶️ استئناف التذكرة", description="تمت إعادة صلاحية الكتابة لصاحب التذكرة.", color=EmbedBuilder.COLOR_SUCCESS))
+        await interaction.response.send_message(embed=EmbedBuilder.create_embed(title="▶️ استئناف التذكرة", description="تمت إعادة صلاحية الكتابة لصاحب التذكرة بنجاح.", color=EmbedBuilder.COLOR_SUCCESS))
 
     @app_commands.command(name="delete_ticket", description="Delete ticket channel / حذف القناة نهائياً")
     async def delete_ticket(self, interaction: discord.Interaction):

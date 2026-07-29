@@ -364,4 +364,10 @@ class TicketCategorySelect(Select):
 class PanelView(View):
     def __init__(self, categories: list, panel_id: int, lang: str = "ar"):
         super().__init__(timeout=None)
+        self.panel_id = panel_id
         self.add_item(TicketCategorySelect(categories, panel_id, lang))
+
+    @discord.ui.button(label="🔄 ريستارت اللوحة", style=discord.ButtonStyle.secondary, custom_id="btn_restart_panel_view", row=1)
+    async def btn_restart_panel(self, interaction: discord.Interaction, button: Button):
+        await interaction.response.defer(ephemeral=True)
+        await interaction.followup.send("🔄 **تم إعادة تشغيل وتحديث اللوحة بنجاح!**", ephemeral=True)

@@ -60,22 +60,25 @@ class TicketActionBase(Select):
         claimed_by = ticket.get("claimed_by")
 
         # Specific user-friendly checks for staff/administration actions
-        administration_actions = [
-            "unclaim", "transfer", "toggle_hide", "department", "priority",
-            "lock", "unlock", "hold", "resume", "add_note", "audit_log", "generate_transcript", "delete",
-            "close", "add_member", "remove_member", "rename"
+        staff_actions = [
+            "claim", "unclaim", "transfer", "toggle_hide", "department", "priority",
+            "lock", "unlock", "hold", "resume", "hold_resume", "toggle_hold", "add_note",
+            "audit_log", "generate_transcript", "delete", "rename", "summon_member", "owner", "restart"
         ]
         
-        if action in administration_actions:
-            # If not claimed, and the action-taker is not the ticket owner (e.g. member closing their own ticket)
-            if not claimed_by and member.id != ticket_user_id:
-                return await interaction.response.send_message("⚠️ يجب استلام التذكرة أولاً لتتمكن من استخدام أوامر الإدارة عليها!", ephemeral=True)
-                
-            # If claimed, check if the action-taker is the claimant, the owner, or an administrator
-            user_rank = PermissionHandler.get_member_rank(member)
-            if claimed_by and member.id != claimed_by and member.id != ticket_user_id:
+        if action in staff_actions:
+            if not PermissionHandler.is_staff(member) and not PermissionHandler.is_bot_owner(member.id):
+                return await interaction.response.send_message("❌ عفواً! هذه الخيارات والأوامر مخصصة فقط لإدارة وطاقم الدعم الفني.", ephemeral=True)
+
+            if action not in ["claim", "restart"] and not claimed_by:
+                user_rank = PermissionHandler.get_member_rank(member)
                 if user_rank < PermissionHandler.ROLE_HIERARCHY["admin"] and not PermissionHandler.is_bot_owner(member.id):
-                    return await interaction.response.send_message("❌ هذه التذكرة مستلمة من قبل موظف آخر، ولا يمكنك إدارتها إلا إذا كنت مسؤولاً.", ephemeral=True)
+                    return await interaction.response.send_message("⚠️ يجب استلام التذكرة أولاً لتتمكن من استخدام أوامر الإدارة عليها!", ephemeral=True)
+
+            if claimed_by and member.id != claimed_by:
+                user_rank = PermissionHandler.get_member_rank(member)
+                if user_rank < PermissionHandler.ROLE_HIERARCHY["admin"] and not PermissionHandler.is_bot_owner(member.id):
+                    return await interaction.response.send_message(f"❌ هذه التذكرة مستلمة من قبل موظف آخر (<@{claimed_by}>)، ولا يمكنك إدارتها إلا إذا كنت مسؤولاً.", ephemeral=True)
 
         if not PermissionHandler.can_execute_action(guild, member, action, ticket_user_id, ticket_data=ticket):
             return await interaction.response.send_message(get_text("permission_denied", self.lang), ephemeral=True)
@@ -85,6 +88,10 @@ class TicketActionBase(Select):
             if action == "rate_staff":
                 if not ticket.get("claimed_by"):
                     return await interaction.response.send_message("⚠️ لا يمكن تقييم التذكرة لأنها لم تُستلم من قبل أي موظف بعد.", ephemeral=True)
+                if member.id != ticket_user_id:
+                    return await interaction.response.send_message("❌ خيار تقييم الموظف مخصص فقط لصاحب التذكرة!", ephemeral=True)
+                if member.id == ticket.get("claimed_by"):
+                    return await interaction.response.send_message("❌ لا يمكنك تقييم نفسك!", ephemeral=True)
                 await interaction.response.send_modal(RatingModal(ticket, staff_id=ticket.get("claimed_by"), lang=self.lang))
             elif action == "transfer": await interaction.response.send_modal(TransferTicketModal(ticket, self.lang))
             elif action == "priority": await interaction.response.send_modal(ChangePriorityModal(ticket, self.lang))
@@ -245,29 +252,60 @@ class TicketActionBase(Select):
             status_text = "مخفية (فقط المستلم وصاحب التذكرة)" if new_hidden else "مرئية لكافة الطاقم (مشاهدة فقط بدون كتابة)"
             await interaction.followup.send(f"✅ تم تغيير حالة التذكرة إلى: **{status_text}**", ephemeral=True)
 
-        elif action == "lock":
-            owner = guild.get_member(ticket_user_id)
-            if owner: await interaction.channel.set_permissions(owner, view_channel=False)
-            db.update_ticket_status(interaction.channel_id, "locked")
-            await interaction.followup.send(embed=EmbedBuilder.create_embed(title="🔐 تم قفل التذكرة", description="تم قفل التذكرة وإخفاؤها عن العضو.", color=EmbedBuilder.COLOR_DANGER))
+        elif action in ["lock", "unlock"]:
+            owner = guild.get_member(ticket_user_id) if ticket_user_id else None
+            if not owner and ticket_user_id:
+                try:
+                    owner = await guild.fetch_member(ticket_user_id)
+                except Exception:
+                    owner = None
 
-        elif action == "unlock":
-            owner = guild.get_member(ticket_user_id)
-            if owner: await interaction.channel.set_permissions(owner, view_channel=True, send_messages=True)
-            db.update_ticket_status(interaction.channel_id, "open")
-            await interaction.followup.send(embed=EmbedBuilder.create_embed(title="🔓 تم فتح التذكرة", description="تمت إعادة صلاحية الرؤية والكتابة للعضو.", color=EmbedBuilder.COLOR_SUCCESS))
+            if action == "lock":
+                if owner and isinstance(owner, discord.Member):
+                    await interaction.channel.set_permissions(owner, view_channel=False)
+                db.update_ticket_status(interaction.channel_id, "locked")
+                await interaction.followup.send(embed=EmbedBuilder.create_embed(title="🔐 تم قفل التذكرة", description="تم قفل التذكرة وإخفاؤها عن العضو.", color=EmbedBuilder.COLOR_DANGER))
+            else:
+                if owner and isinstance(owner, discord.Member):
+                    await interaction.channel.set_permissions(owner, view_channel=True, send_messages=True)
+                new_st = "claimed" if ticket.get("claimed_by") else "open"
+                db.update_ticket_status(interaction.channel_id, new_st)
+                await interaction.followup.send(embed=EmbedBuilder.create_embed(title="🔓 تم فتح التذكرة", description="تمت إعادة صلاحية الرؤية والكتابة للعضو.", color=EmbedBuilder.COLOR_SUCCESS))
 
-        elif action == "hold":
-            owner = guild.get_member(ticket_user_id)
-            if owner: await interaction.channel.set_permissions(owner, view_channel=True, send_messages=False)
-            db.update_ticket_status(interaction.channel_id, "on_hold")
-            await interaction.followup.send(embed=EmbedBuilder.create_embed(title="⏸️ تم تعليق التذكرة", description="العضو الآن قادر على الرؤية فقط ولا يمكنه الكتابة.", color=EmbedBuilder.COLOR_WARNING))
+        elif action in ["hold", "resume", "hold_resume", "toggle_hold"]:
+            current_status = ticket.get("status", "open")
+            owner = guild.get_member(ticket_user_id) if ticket_user_id else None
+            if not owner and ticket_user_id:
+                try:
+                    owner = await guild.fetch_member(ticket_user_id)
+                except Exception:
+                    owner = None
 
-        elif action == "resume":
-            owner = guild.get_member(ticket_user_id)
-            if owner: await interaction.channel.set_permissions(owner, view_channel=True, send_messages=True)
-            db.update_ticket_status(interaction.channel_id, "open")
-            await interaction.followup.send(embed=EmbedBuilder.create_embed(title="▶️ استئناف التذكرة", description="تمت إعادة صلاحية الكتابة للعضو.", color=EmbedBuilder.COLOR_SUCCESS))
+            if current_status == "on_hold" or action == "resume":
+                if owner and isinstance(owner, discord.Member):
+                    await interaction.channel.set_permissions(owner, view_channel=True, send_messages=True)
+                new_st = "claimed" if ticket.get("claimed_by") else "open"
+                db.update_ticket_status(interaction.channel_id, new_st)
+                await interaction.followup.send(embed=EmbedBuilder.create_embed(title="▶️ تم استئناف التذكرة", description="تمت إعادة صلاحية الكتابة للعضو بنجاح.", color=EmbedBuilder.COLOR_SUCCESS))
+                await TicketLogger.log_action(guild, ticket, "استئناف التذكرة", member)
+            else:
+                if owner and isinstance(owner, discord.Member):
+                    await interaction.channel.set_permissions(owner, view_channel=True, send_messages=False)
+                db.update_ticket_status(interaction.channel_id, "on_hold")
+                await interaction.followup.send(embed=EmbedBuilder.create_embed(title="⏸️ تم تعليق التذكرة", description="العضو الآن قادر على الرؤية فقط ولا يمكنه الكتابة.", color=EmbedBuilder.COLOR_WARNING))
+                await TicketLogger.log_action(guild, ticket, "تعليق التذكرة", member)
+
+        elif action == "restart":
+            is_hidden = ticket.get("is_hidden", 0)
+            await PermissionHandler.set_ticket_visibility(interaction.channel, guild, ticket, is_hidden=bool(is_hidden))
+            await interaction.followup.send(
+                embed=EmbedBuilder.create_embed(
+                    title="🔄 تم إعادة تشغيل القائمة والتذكرة",
+                    description="تم تحديث حالة القائمة وضبط صلاحيات القناة بنجاح! 🔄",
+                    color=EmbedBuilder.COLOR_PRIMARY
+                ),
+                ephemeral=True
+            )
 
         elif action == "info":
             owner_id = ticket.get("user_id")
@@ -304,8 +342,6 @@ class TicketActionBase(Select):
             await asyncio.sleep(3)
             await interaction.channel.delete()
 
-        # Removed redundant elifs since they are handled at the top modal check
-
 
 # Select Components
 class MemberActionsSelect(TicketActionBase):
@@ -334,13 +370,13 @@ class StaffManagementSelect(TicketActionBase):
 
 class StaffSystemSelect(TicketActionBase):
     def __init__(self, ticket: dict, lang: str = "ar"):
-        status = ticket.get("status", "open")
         super().__init__(ticket=ticket, lang=lang, placeholder="⚙️ النظام والأرشيف", options=[
-            discord.SelectOption(label="قفل/فتح (للعضو)", value="lock" if status != "locked" else "unlock", emoji="🔐"),
-            discord.SelectOption(label="تعليق/استئناف", value="hold" if status != "on_hold" else "resume", emoji="⏸️"),
+            discord.SelectOption(label="قفل/فتح (للعضو)", value="lock", emoji="🔐"),
+            discord.SelectOption(label="تعليق/استئناف", value="hold_resume", emoji="⏸️"),
             discord.SelectOption(label="ملاحظة داخلية", value="add_note", emoji="📝"),
             discord.SelectOption(label="سجل العمليات", value="audit_log", emoji="📜"),
             discord.SelectOption(label="Transcript", value="generate_transcript", emoji="📄"),
+            discord.SelectOption(label="🔄 ريستارت التذكرة / تحديث", value="restart", emoji="🔄"),
             discord.SelectOption(label="حذف نهائي", value="delete", emoji="🗑️")
         ], custom_id="sel_staff_sys")
 
@@ -352,4 +388,13 @@ class TicketControlView(View):
         self.add_item(MemberActionsSelect(dummy, lang))
         self.add_item(StaffManagementSelect(dummy, lang))
         self.add_item(StaffSystemSelect(dummy, lang))
+
+    @discord.ui.button(label="🔄 ريستارت القائمة", style=discord.ButtonStyle.secondary, custom_id="btn_restart_ticket_controls", row=3)
+    async def btn_restart_controls(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
+        ticket = db.get_ticket_by_channel(interaction.channel_id)
+        if ticket:
+            is_hidden = ticket.get("is_hidden", 0)
+            await PermissionHandler.set_ticket_visibility(interaction.channel, interaction.guild, ticket, is_hidden=bool(is_hidden))
+        await interaction.followup.send("🔄 **تم إعادة تشغيل وتحديث قائمة التذكرة وصلاحياتها بنجاح!**", ephemeral=True)
 
