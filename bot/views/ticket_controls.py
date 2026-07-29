@@ -63,14 +63,14 @@ class TicketActionBase(Select):
         staff_actions = [
             "claim", "unclaim", "transfer", "toggle_hide", "department", "priority",
             "lock", "unlock", "hold", "resume", "hold_resume", "toggle_hold", "add_note",
-            "audit_log", "generate_transcript", "delete", "rename", "summon_member", "owner", "restart"
+            "audit_log", "generate_transcript", "delete", "rename", "summon_member", "owner"
         ]
         
         if action in staff_actions:
             if not PermissionHandler.is_staff(member) and not PermissionHandler.is_bot_owner(member.id):
                 return await interaction.response.send_message("❌ عفواً! هذه الخيارات والأوامر مخصصة فقط لإدارة وطاقم الدعم الفني.", ephemeral=True)
 
-            if action not in ["claim", "restart"] and not claimed_by:
+            if action not in ["claim"] and not claimed_by:
                 user_rank = PermissionHandler.get_member_rank(member)
                 if user_rank < PermissionHandler.ROLE_HIERARCHY["admin"] and not PermissionHandler.is_bot_owner(member.id):
                     return await interaction.response.send_message("⚠️ يجب استلام التذكرة أولاً لتتمكن من استخدام أوامر الإدارة عليها!", ephemeral=True)
@@ -80,7 +80,7 @@ class TicketActionBase(Select):
                 if user_rank < PermissionHandler.ROLE_HIERARCHY["admin"] and not PermissionHandler.is_bot_owner(member.id):
                     return await interaction.response.send_message(f"❌ هذه التذكرة مستلمة من قبل موظف آخر (<@{claimed_by}>)، ولا يمكنك إدارتها إلا إذا كنت مسؤولاً.", ephemeral=True)
 
-        if not PermissionHandler.can_execute_action(guild, member, action, ticket_user_id, ticket_data=ticket):
+        if action != "restart" and not PermissionHandler.can_execute_action(guild, member, action, ticket_user_id, ticket_data=ticket):
             return await interaction.response.send_message(get_text("permission_denied", self.lang), ephemeral=True)
 
         if action in ["transfer", "priority", "rename", "department", "owner", "add_member", "remove_member", "add_note", "rate_staff"]:
@@ -171,9 +171,9 @@ class TicketActionBase(Select):
             await interaction.followup.send(embed=EmbedBuilder.create_embed(title="🔒 تم إغلاق التذكرة", description=f"أغلقت التذكرة بواسطة {member.mention}.", color=EmbedBuilder.COLOR_DANGER))
             await TicketLogger.log_action(guild, ticket, "إغلاق التذكرة", member)
 
-            # Send rating view to ticket owner if ticket was claimed
-            staff_id = ticket.get("claimed_by")
-            if owner and staff_id:
+            # Send rating view to ticket owner
+            staff_id = ticket.get("claimed_by") or member.id
+            if owner and ticket_user_id:
                 from bot.views.rating_view import RatingView
                 try:
                     staff_member = guild.get_member(staff_id)
@@ -189,7 +189,7 @@ class TicketActionBase(Select):
                         description=(
                             f"مرحباً <@{ticket_user_id}> 👋،\n"
                             f"تم إغلاق تذكرتك بنجاح في سيرفر **{guild.name}**.\n\n"
-                            f"👤 **مستلم التذكرة:** {staff_mention}\n\n"
+                            f"👤 **مستلم التذكرة / المسؤول:** {staff_mention}\n\n"
                             f"يرجى تقييم أداء الموظف وجودة الخدمة التي تلقيتها بالضغط على الأزرار أدناه (1 إلى 5 نجوم):"
                         ),
                         color=EmbedBuilder.COLOR_PRIMARY
@@ -338,7 +338,45 @@ class TicketActionBase(Select):
             await interaction.followup.send(f"📜 **سجل العمليات الأخير:**\n{log_text or 'لا توجد عمليات مسجلة.'}", ephemeral=True)
         
         elif action == "delete":
-            await interaction.followup.send("🗑️ جاري حذف التذكرة خلال 3 ثوانٍ...")
+            await interaction.followup.send("🗑️ جاري حذف التذكرة وإرسال طلب التقييم لصاحب التذكرة خلال 3 ثوانٍ...")
+            owner = guild.get_member(ticket_user_id) if ticket_user_id else None
+            if not owner and ticket_user_id:
+                try:
+                    owner = await guild.fetch_member(ticket_user_id)
+                except Exception:
+                    try:
+                        owner = await interaction.client.fetch_user(ticket_user_id)
+                    except Exception:
+                        owner = None
+
+            staff_id = ticket.get("claimed_by") or member.id
+            if owner and ticket_user_id:
+                from bot.views.rating_view import RatingView
+                try:
+                    staff_member = guild.get_member(staff_id)
+                    if not staff_member:
+                        try:
+                            staff_member = await guild.fetch_member(staff_id)
+                        except Exception:
+                            staff_member = None
+                    staff_mention = staff_member.mention if staff_member else f"<@{staff_id}>"
+
+                    rating_embed = EmbedBuilder.create_embed(
+                        title="⭐ تقييم خدمة الدعم الفني",
+                        description=(
+                            f"مرحباً <@{ticket_user_id}> 👋،\n"
+                            f"تم حذف تذكرتك في سيرفر **{guild.name}**.\n\n"
+                            f"👤 **مستلم التذكرة / المسؤول:** {staff_mention}\n\n"
+                            f"يرجى تقييم أداء الموظف وجودة الخدمة التي تلقيتها بالضغط على الأزرار أدناه (1 إلى 5 نجوم):"
+                        ),
+                        color=EmbedBuilder.COLOR_PRIMARY
+                    )
+                    await owner.send(embed=rating_embed, view=RatingView(ticket['id'], staff_id, self.lang))
+                except Exception as e:
+                    print(f"Error sending rating DM on delete: {e}")
+
+            db.update_ticket_status(interaction.channel_id, "deleted")
+            await TicketLogger.log_action(guild, ticket, "حذف التذكرة", member)
             await asyncio.sleep(3)
             await interaction.channel.delete()
 
@@ -351,7 +389,8 @@ class MemberActionsSelect(TicketActionBase):
             discord.SelectOption(label="تقييم الإداري", value="rate_staff", emoji="⭐"),
             discord.SelectOption(label="نداء الدعم", value="summon_staff", emoji="🔔"),
             discord.SelectOption(label="إضافة عضو", value="add_member", emoji="➕"),
-            discord.SelectOption(label="حالة التذكرة", value="info", emoji="📊")
+            discord.SelectOption(label="حالة التذكرة", value="info", emoji="📊"),
+            discord.SelectOption(label="🔄 ريستارت / إعادة تحديث القائمة", value="restart", emoji="🔄")
         ], custom_id="sel_member")
 
 class StaffManagementSelect(TicketActionBase):
@@ -365,7 +404,8 @@ class StaffManagementSelect(TicketActionBase):
             discord.SelectOption(label="نداء صاحب التذكرة", value="summon_member", emoji="🔔"),
             discord.SelectOption(label="إخفاء/إظهار", value="toggle_hide", emoji="👁️"),
             discord.SelectOption(label="تغيير القسم", value="department", emoji="🏢"),
-            discord.SelectOption(label="تغيير الأولوية", value="priority", emoji="⚡")
+            discord.SelectOption(label="تغيير الأولوية", value="priority", emoji="⚡"),
+            discord.SelectOption(label="🔄 ريستارت / إعادة تحديث القائمة", value="restart", emoji="🔄")
         ], custom_id="sel_staff_mgmt")
 
 class StaffSystemSelect(TicketActionBase):
@@ -376,8 +416,8 @@ class StaffSystemSelect(TicketActionBase):
             discord.SelectOption(label="ملاحظة داخلية", value="add_note", emoji="📝"),
             discord.SelectOption(label="سجل العمليات", value="audit_log", emoji="📜"),
             discord.SelectOption(label="Transcript", value="generate_transcript", emoji="📄"),
-            discord.SelectOption(label="🔄 ريستارت التذكرة / تحديث", value="restart", emoji="🔄"),
-            discord.SelectOption(label="حذف نهائي", value="delete", emoji="🗑️")
+            discord.SelectOption(label="حذف نهائي", value="delete", emoji="🗑️"),
+            discord.SelectOption(label="🔄 ريستارت / إعادة تحديث القائمة", value="restart", emoji="🔄")
         ], custom_id="sel_staff_sys")
 
 class TicketControlView(View):

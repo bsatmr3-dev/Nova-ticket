@@ -257,8 +257,14 @@ class ChannelSelectDropdown(Select):
                 value=str(c.id),
                 description=f"ID: {c.id}",
                 emoji="💬"
-            ) for c in channels[:25]
+            ) for c in channels[:24]
         ]
+        options.append(discord.SelectOption(
+            label="🔄 ريستارت / إعادة تحديث القائمة",
+            value="restart",
+            description="تفريغ الاختيار لإمكانية التحديد مجدداً",
+            emoji="🔄"
+        ))
         super().__init__(
             placeholder="📋 اختر قناة لتعيينها كقناة السجلات (Log Channel)",
             min_values=1,
@@ -271,7 +277,11 @@ class ChannelSelectDropdown(Select):
         if not check_master_permission(interaction):
             return await send_no_perm(interaction)
 
-        channel_id = int(self.values[0])
+        val = self.values[0]
+        if val in ["restart", "reset"]:
+            return await interaction.response.send_message("🔄 **تم إعادة تعيين القائمة بنجاح!**", ephemeral=True)
+
+        channel_id = int(val)
         db.set_guild_setting(interaction.guild_id, "log_channel_id", channel_id)
         await interaction.response.send_message(
             f"📋 **تم تعيين قناة السجلات بنجاح إلى:** <#{channel_id}>",
@@ -318,6 +328,12 @@ class MasterMenuDropdown(Select):
                 description="تحميل ملف SQLite الخاص بقاعدة البيانات فوراً",
                 emoji="💾"
             ),
+            discord.SelectOption(
+                label="🔄 ريستارت / إعادة تحديث القائمة",
+                value="restart",
+                description="تفريغ الاختيار لإمكانية التحديد مجدداً",
+                emoji="🔄"
+            ),
         ]
         super().__init__(
             placeholder="⚡ اختر إجراء سريع من القائمة الرئيسية...",
@@ -332,6 +348,9 @@ class MasterMenuDropdown(Select):
             return await send_no_perm(interaction)
 
         val = self.values[0]
+
+        if val in ["restart", "reset"]:
+            return await interaction.response.send_message("🔄 **تم إعادة تحديث لوحة التحكم بنجاح!** يمكنك الآن اختيار الخيار المطلوب مجدداً.", ephemeral=True)
 
         if val == "setup_panel_here":
             await interaction.response.send_modal(QuickSetupPanelModal(target_channel_id=interaction.channel_id))

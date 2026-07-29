@@ -153,9 +153,9 @@ class TicketManagementCog(commands.Cog):
         await interaction.response.send_message(embed=EmbedBuilder.create_embed(title="🔒 تم إغلاق التذكرة", description=f"أغلقت التذكرة بواسطة {member.mention}.", color=EmbedBuilder.COLOR_DANGER))
         await TicketLogger.log_action(guild, ticket, "إغلاق التذكرة", member)
 
-        # Send rating DM to owner if ticket was claimed
-        staff_id = ticket.get("claimed_by")
-        if owner and staff_id:
+        # Send rating DM to owner
+        staff_id = ticket.get("claimed_by") or member.id
+        if owner and ticket_user_id:
             from bot.views.rating_view import RatingView
             try:
                 staff_member = guild.get_member(staff_id)
@@ -174,7 +174,7 @@ class TicketManagementCog(commands.Cog):
                     description=(
                         f"مرحباً <@{ticket_user_id}> 👋،\n"
                         f"تم إغلاق تذكرتك بنجاح في سيرفر **{guild.name}**.\n\n"
-                        f"👤 **مستلم التذكرة:** {staff_mention}\n\n"
+                        f"👤 **مستلم التذكرة / المسؤول:** {staff_mention}\n\n"
                         f"يرجى تقييم أداء الموظف وجودة الخدمة التي تلقيتها بالضغط على الأزرار أدناه (1 إلى 5 نجوم):"
                     ),
                     color=EmbedBuilder.COLOR_PRIMARY
@@ -315,8 +315,54 @@ class TicketManagementCog(commands.Cog):
         if not await self.check_ticket_state(interaction, ticket, "delete"):
             return
 
-        await interaction.response.send_message("🗑️ Deleting ticket channel in 5 seconds...")
-        await asyncio.sleep(5)
+        guild = interaction.guild
+        member = interaction.user
+        ticket_user_id = ticket.get("user_id")
+
+        await interaction.response.send_message("🗑️ جاري حذف التذكرة وإرسال طلب التقييم لصاحب التذكرة خلال 3 ثوانٍ...")
+
+        owner = guild.get_member(ticket_user_id) if ticket_user_id else None
+        if not owner and ticket_user_id:
+            try:
+                owner = await guild.fetch_member(ticket_user_id)
+            except Exception:
+                try:
+                    owner = await self.bot.fetch_user(ticket_user_id)
+                except Exception:
+                    owner = None
+
+        staff_id = ticket.get("claimed_by") or member.id
+        if owner and ticket_user_id:
+            from bot.views.rating_view import RatingView
+            try:
+                staff_member = guild.get_member(staff_id)
+                if not staff_member:
+                    try:
+                        staff_member = await guild.fetch_member(staff_id)
+                    except Exception:
+                        staff_member = None
+                staff_mention = staff_member.mention if staff_member else f"<@{staff_id}>"
+
+                settings = db.get_guild_settings(guild.id) or {}
+                lang = settings.get("language", "ar")
+
+                rating_embed = EmbedBuilder.create_embed(
+                    title="⭐ تقييم خدمة الدعم الفني",
+                    description=(
+                        f"مرحباً <@{ticket_user_id}> 👋،\n"
+                        f"تم حذف تذكرتك في سيرفر **{guild.name}**.\n\n"
+                        f"👤 **مستلم التذكرة / المسؤول:** {staff_mention}\n\n"
+                        f"يرجى تقييم أداء الموظف وجودة الخدمة التي تلقيتها بالضغط على الأزرار أدناه (1 إلى 5 نجوم):"
+                    ),
+                    color=EmbedBuilder.COLOR_PRIMARY
+                )
+                await owner.send(embed=rating_embed, view=RatingView(ticket['id'], staff_id, lang))
+            except Exception as e:
+                print(f"Error sending rating DM on delete_ticket: {e}")
+
+        db.update_ticket_status(interaction.channel_id, "deleted")
+        await TicketLogger.log_action(guild, ticket, "حذف التذكرة", member)
+        await asyncio.sleep(3)
         await interaction.channel.delete(reason=f"Ticket deleted by {interaction.user.name}")
 
     @app_commands.command(name="add_member", description="Add user to ticket / إضافة عضو للتذكرة")
