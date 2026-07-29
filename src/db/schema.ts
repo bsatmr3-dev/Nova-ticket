@@ -31,6 +31,7 @@ export const tickets = pgTable('tickets', {
   isHidden: integer('is_hidden').default(0),
   lastStaffMessageAt: text('last_staff_message_at'),
   memberResponded: integer('member_responded').default(1),
+  categoryPoints: integer('category_points').default(0),
 }, (table) => ({
   userStatusIdx: index('idx_tickets_user').on(table.userId, table.status),
   channelIdx: index('idx_tickets_channel').on(table.channelId),
@@ -114,3 +115,12 @@ export const ticketAuditLogs = pgTable('ticket_audit_logs', {
 }, (table) => ({
   ticketIdx: index('idx_audit_ticket').on(table.ticketId),
 }));
+
+export const staffStats = pgTable('staff_stats', {
+  guildId: bigint('guild_id', { mode: 'bigint' }).notNull(),
+  userId: bigint('user_id', { mode: 'bigint' }).notNull(),
+  points: integer('points').default(0),
+  ticketsHandled: integer('tickets_handled').default(0),
+  totalStars: integer('total_stars').default(0),
+  totalRatings: integer('total_ratings').default(0),
+});

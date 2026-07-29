@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@google/genai": "^2.4.0",
+    "@supabase/supabase-js": "^2.111.0",
     "@tailwindcss/vite": "^4.1.14",
     "@types/pg": "^8.20.0",
     "@vitejs/plugin-react": "^5.0.4",
@@ -19,8 +20,6 @@
     "drizzle-kit": "^0.31.10",
     "drizzle-orm": "^0.45.2",
     "express": "^4.21.2",
-    "firebase": "^12.16.0",
-    "firebase-admin": "^14.2.0",
     "jszip": "^3.10.1",
     "lucide-react": "^0.546.0",
     "motion": "^12.23.24",

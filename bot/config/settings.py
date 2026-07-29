@@ -1,7 +1,9 @@
 import os
-from dotenv import load_dotenv
-
-load_dotenv()
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
 
 def get_bot_token():
     raw = os.getenv("DISCORD_BOT_TOKEN", os.getenv("BOT_TOKEN", ""))
