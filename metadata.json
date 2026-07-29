@@ -1,0 +1,6 @@
+{
+  "name": "Discord Advanced Ticket Bot Studio",
+  "description": "Professional Discord Ticket Bot in Python (discord.py) with Cogs, HTML Transcripts, Ratings, Anti-Spam, Custom Panels, Arabic/English localization, and Web Management Studio.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
