@@ -78,11 +78,36 @@ app.get("/api/bot/status", (req, res) => {
   });
 });
 
+// Helper to find working python executable
+function getPythonExecutable(): string {
+  const candidates = [
+    "python3",
+    "python",
+    "/usr/bin/python3",
+    "/usr/local/bin/python3",
+    "/opt/venv/bin/python3",
+    "/opt/venv/bin/python",
+    "/usr/bin/python",
+    "/usr/local/bin/python"
+  ];
+  for (const cmd of candidates) {
+    try {
+      execFileSync(cmd, ["--version"], { stdio: "ignore" });
+      return cmd;
+    } catch {
+      // try next
+    }
+  }
+  return "python3";
+}
+
 // Helper function to launch Python Discord Bot
 function launchBotProcess() {
+  const pythonCmd = getPythonExecutable();
+
   // Always clean up any orphan/lingering bot process before launching
   try {
-    execFileSync("pkill", ["-f", "python3 -m bot.main"]);
+    execFileSync("pkill", ["-f", `${pythonCmd} -m bot.main`]);
   } catch {
     // Ignore if no lingering process existed
   }
@@ -102,12 +127,17 @@ function launchBotProcess() {
     fs.writeFileSync(".env", `DISCORD_BOT_TOKEN=${token}\n`);
   }
 
-  addLog("🚀 Launching Python Discord Bot process (python3 -m bot.main)...");
+  addLog(`🚀 Launching Python Discord Bot process (${pythonCmd} -m bot.main)...`);
 
   try {
-    botProcess = spawn("python3", ["-m", "bot.main"], {
+    botProcess = spawn(pythonCmd, ["-m", "bot.main"], {
       cwd: process.cwd(),
       env: { ...process.env, DISCORD_BOT_TOKEN: token, PYTHONUNBUFFERED: "1", PYTHONPATH: process.cwd() }
+    });
+
+    botProcess.on("error", (err: any) => {
+      addLog(`❌ Bot process error: ${err.message}`);
+      botProcess = null;
     });
 
     botProcess.stdout?.on("data", (data) => {
@@ -396,8 +426,9 @@ app.use("/api/control", requireAuth);
 
 function runCliApi(command: string, args: object = {}): any {
   try {
+    const pythonCmd = getPythonExecutable();
     const jsonStr = JSON.stringify(args);
-    const rawResultStr = execFileSync("python3", ["bot/cli_api.py", command, jsonStr], {
+    const rawResultStr = execFileSync(pythonCmd, ["bot/cli_api.py", command, jsonStr], {
       encoding: "utf-8",
       timeout: 30000,
       env: { ...process.env, PYTHONPATH: process.cwd() }

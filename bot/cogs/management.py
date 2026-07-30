@@ -5,6 +5,7 @@ import asyncio
 from bot.database.db import db
 from bot.utils.permissions import PermissionHandler
 from bot.utils.embeds import EmbedBuilder
+from bot.utils.transcript_generator import TranscriptGenerator
 from bot.views.modal_views import InternalNoteModal, RenameTicketModal
 
 class TicketManagementCog(commands.Cog):
@@ -152,6 +153,11 @@ class TicketManagementCog(commands.Cog):
 
         await interaction.response.send_message(embed=EmbedBuilder.create_embed(title="🔒 تم إغلاق التذكرة", description=f"أغلقت التذكرة بواسطة {member.mention}.", color=EmbedBuilder.COLOR_DANGER))
         await TicketLogger.log_action(guild, ticket, "إغلاق التذكرة", member)
+
+        try:
+            await TranscriptGenerator.send_transcript(interaction.channel, ticket, guild)
+        except Exception as e:
+            print(f"Error sending transcript on close_ticket: {e}")
 
         # Send rating DM to owner
         staff_id = ticket.get("claimed_by") or member.id
@@ -320,6 +326,11 @@ class TicketManagementCog(commands.Cog):
         ticket_user_id = ticket.get("user_id")
 
         await interaction.response.send_message("🗑️ جاري حذف التذكرة وإرسال طلب التقييم لصاحب التذكرة خلال 3 ثوانٍ...")
+
+        try:
+            await TranscriptGenerator.send_transcript(interaction.channel, ticket, guild)
+        except Exception as e:
+            print(f"Error sending transcript on delete_ticket: {e}")
 
         owner = guild.get_member(ticket_user_id) if ticket_user_id else None
         if not owner and ticket_user_id:

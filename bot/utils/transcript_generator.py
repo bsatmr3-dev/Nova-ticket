@@ -189,3 +189,63 @@ class TranscriptGenerator:
 </body>
 </html>'''
         return html_template
+
+    @staticmethod
+    async def send_transcript(channel: discord.TextChannel, ticket: dict, guild: discord.Guild, interaction: discord.Interaction = None):
+        html_content = await TranscriptGenerator.generate_html(channel, ticket)
+        file_name = f"transcript-{channel.name}.html"
+        with open(file_name, "w", encoding="utf-8") as f:
+            f.write(html_content)
+
+        file = discord.File(file_name, filename=file_name)
+
+        if interaction:
+            try:
+                if interaction.response.is_done():
+                    await interaction.followup.send("📄 **Ticket Transcript Generated:**", file=file)
+                else:
+                    await interaction.response.send_message("📄 **Ticket Transcript Generated:**", file=file, ephemeral=True)
+            except Exception:
+                try:
+                    await channel.send("📄 **Ticket Transcript Generated:**", file=file)
+                except Exception:
+                    pass
+        else:
+            try:
+                await channel.send("📄 **Ticket Transcript Generated:**", file=file)
+            except Exception:
+                pass
+
+        try:
+            from bot.database.db import db
+            settings = db.get_guild_settings(guild.id) or {}
+            trans_ch_id = settings.get("transcript_channel_id")
+            if trans_ch_id:
+                trans_ch = guild.get_channel(trans_ch_id)
+                if not trans_ch:
+                    try:
+                        trans_ch = await guild.fetch_channel(trans_ch_id)
+                    except Exception:
+                        trans_ch = None
+                
+                if trans_ch:
+                    from bot.utils.embeds import EmbedBuilder
+                    ticket_id = ticket.get("id", "N/A") if ticket else "N/A"
+                    user_id = ticket.get("user_id") if ticket else None
+                    user_mention = f"<@{user_id}>" if user_id else "غير معروف"
+                    embed = EmbedBuilder.create_embed(
+                        title=f"📄 أرشيف تذكرة جديدة #{ticket_id}",
+                        description=f"• **اسم القناة:** `#{channel.name}`\n• **صاحب التذكرة:** {user_mention}\n• **الحالة:** أرشيف محادثة HTML",
+                        color=EmbedBuilder.COLOR_INFO
+                    )
+                    file_for_trans = discord.File(file_name, filename=file_name)
+                    await trans_ch.send(embed=embed, file=file_for_trans)
+        except Exception as e:
+            print(f"Error sending transcript to transcript_channel: {e}")
+
+        if os.path.exists(file_name):
+            try:
+                os.remove(file_name)
+            except Exception:
+                pass
+

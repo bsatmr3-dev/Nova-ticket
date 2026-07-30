@@ -171,6 +171,12 @@ class TicketActionBase(Select):
             await interaction.followup.send(embed=EmbedBuilder.create_embed(title="🔒 تم إغلاق التذكرة", description=f"أغلقت التذكرة بواسطة {member.mention}.", color=EmbedBuilder.COLOR_DANGER))
             await TicketLogger.log_action(guild, ticket, "إغلاق التذكرة", member)
 
+            try:
+                from bot.utils.transcript_generator import TranscriptGenerator
+                await TranscriptGenerator.send_transcript(interaction.channel, ticket, guild)
+            except Exception as e:
+                print(f"Error sending transcript on close: {e}")
+
             # Send rating view to ticket owner
             staff_id = ticket.get("claimed_by") or member.id
             if owner and ticket_user_id:
@@ -336,9 +342,19 @@ class TicketActionBase(Select):
             audits = db.get_audit_logs(ticket.get("id"))
             log_text = "\n".join([f"• {a['action']} بواسطة <@{a['executor_id']}>" for a in audits[-10:]])
             await interaction.followup.send(f"📜 **سجل العمليات الأخير:**\n{log_text or 'لا توجد عمليات مسجلة.'}", ephemeral=True)
+
+        elif action == "generate_transcript":
+            from bot.utils.transcript_generator import TranscriptGenerator
+            await TranscriptGenerator.send_transcript(interaction.channel, ticket, guild, interaction)
+            await TicketLogger.log_action(guild, ticket, "تصدير Transcript", member)
         
         elif action == "delete":
             await interaction.followup.send("🗑️ جاري حذف التذكرة وإرسال طلب التقييم لصاحب التذكرة خلال 3 ثوانٍ...")
+            try:
+                from bot.utils.transcript_generator import TranscriptGenerator
+                await TranscriptGenerator.send_transcript(interaction.channel, ticket, guild)
+            except Exception as e:
+                print(f"Error sending transcript on delete: {e}")
             owner = guild.get_member(ticket_user_id) if ticket_user_id else None
             if not owner and ticket_user_id:
                 try:
