@@ -28,7 +28,7 @@ class DatabaseManager:
             base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
             self.db_path = os.path.join(base_dir, self.db_path)
             
-        db_url = os.environ.get("DATABASE_URL") or os.environ.get("SUPABASE_DB_URL") or os.environ.get("SQL_HOST") or os.environ.get("SUPABASE_URL")
+        db_url = os.environ.get("DATABASE_URL")
         self.is_postgres = HAS_POSTGRES and (db_url is not None and len(db_url.strip()) > 0)
         
         if not self.is_postgres:
@@ -44,7 +44,7 @@ class DatabaseManager:
 
     def _get_connection(self):
         if self.is_postgres:
-            db_url = os.environ.get("DATABASE_URL") or os.environ.get("SUPABASE_DB_URL")
+            db_url = os.environ.get("DATABASE_URL")
             try:
                 if db_url and len(db_url.strip()) > 0:
                     clean_url = db_url.strip()
@@ -53,22 +53,9 @@ class DatabaseManager:
                     conn = psycopg2.connect(clean_url, connect_timeout=10)
                     return conn
                 else:
-                    sql_host = os.environ.get("SQL_HOST") or os.environ.get("SUPABASE_HOST")
-                    sql_user = os.environ.get("SQL_USER") or os.environ.get("SUPABASE_USER", "postgres")
-                    sql_pass = os.environ.get("SQL_PASSWORD") or os.environ.get("SUPABASE_PASSWORD")
-                    sql_db = os.environ.get("SQL_DB_NAME") or os.environ.get("SUPABASE_DB_NAME", "postgres")
-                    sql_port = os.environ.get("SQL_PORT") or os.environ.get("SUPABASE_PORT", "5432")
-                    conn = psycopg2.connect(
-                        host=sql_host,
-                        user=sql_user,
-                        password=sql_pass,
-                        database=sql_db,
-                        port=sql_port,
-                        connect_timeout=10
-                    )
-                    return conn
+                    raise ValueError("DATABASE_URL environment variable is empty or not set.")
             except Exception as e:
-                sys.stderr.write(f"Error connecting to Supabase PostgreSQL: {e}\n")
+                sys.stderr.write(f"Error connecting to Supabase PostgreSQL via DATABASE_URL: {e}\n")
                 self.is_postgres = False
                 os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
                 sys.stderr.write(f"[DB_CONNECTION] Fallback to SQLite DB file: {self.db_path} (Absolute: {os.path.abspath(self.db_path)})\n")
