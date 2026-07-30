@@ -190,6 +190,9 @@ class CategoryInfoModal(Modal):
         except ValueError:
             p_val = 5
 
+        # Fetch existing category data if it exists to preserve sub-settings like category_id and roles
+        existing_cat = self.session.categories[self.session.current_cat_index] if self.session.current_cat_index < len(self.session.categories) else {}
+
         cat_data = {
             "id": f"cat_{self.session.current_cat_index + 1}",
             "name": self.cat_name.value.strip(),
