@@ -129,7 +129,6 @@ class TicketBot(commands.Bot):
                 except Exception as e:
                     logger.error(f"Error handling dynamic panel interaction: {e}")
 
-            await super().on_interaction(interaction)
         except Exception as err:
             logger.error(f"❌ Critical Uncaught Exception in Interaction: {err}", exc_info=err)
             try:
