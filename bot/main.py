@@ -112,22 +112,34 @@ class TicketBot(commands.Bot):
             logger.error(f"Failed to send error message to user: {send_err}")
 
     async def on_interaction(self, interaction: discord.Interaction):
-        custom_id = interaction.data.get("custom_id") if (interaction.data and "custom_id" in interaction.data) else None
-        if custom_id and custom_id.startswith("panel_select_"):
+        try:
+            custom_id = interaction.data.get("custom_id") if (interaction.data and isinstance(interaction.data, dict) and "custom_id" in interaction.data) else None
+            if custom_id and str(custom_id).startswith("panel_select_"):
+                try:
+                    panel_id = int(str(custom_id).split("_")[-1])
+                    panel = db.get_panel_by_id(panel_id)
+                    if not panel:
+                        msg = (
+                            f"⚠️ **لم يتم العثور على لوحة التذاكر رقم {panel_id} في قاعدة البيانات.**\n\n"
+                            f"يرجى إعادة حفظ أو نشر هذه اللوحة من خلال لوحة التحكم لتحديث بياناتها وتفعيل أزرارها."
+                        )
+                        if not interaction.response.is_done():
+                            await interaction.response.send_message(msg, ephemeral=True)
+                        return
+                except Exception as e:
+                    logger.error(f"Error handling dynamic panel interaction: {e}")
+
+            await super().on_interaction(interaction)
+        except Exception as err:
+            logger.error(f"❌ Critical Uncaught Exception in Interaction: {err}", exc_info=err)
             try:
-                panel_id = int(custom_id.split("_")[-1])
-                panel = db.get_panel_by_id(panel_id)
-                if not panel:
-                    msg = (
-                        f"⚠️ **تم ترقية نظام قواعد البيانات الخاص بالبوت بنجاح إلى PostgreSQL الأكثر استقراراً!**\n\n"
-                        f"نظراً لهذا التحديث، يرجى إعادة حفظ أو نشر هذه اللوحة **(لوحة رقم {panel_id})** من خلال لوحة التحكم الخاصة بالبوت لتسجيل أقسامها وبياناتها في النظام الجديد ولتفعيل الأزرار والقوائم الخاصة بها."
-                    )
-                    if not interaction.response.is_done():
-                        await interaction.response.send_message(msg, ephemeral=True)
-                    return
-            except Exception as e:
-                logger.error(f"Error handling dynamic panel interaction: {e}")
-        await super().on_interaction(interaction)
+                msg = f"❌ حدث خطأ غير متوقع أثناء معالجة الطلب:\n```{str(err)[:500]}```"
+                if interaction.response.is_done():
+                    await interaction.followup.send(msg, ephemeral=True)
+                else:
+                    await interaction.response.send_message(msg, ephemeral=True)
+            except Exception as send_err:
+                logger.error(f"Failed to respond to failed interaction: {send_err}")
 
     async def on_ready(self):
         logger.info(f"⚡ Bot logged in successfully as: {self.user.name} ({self.user.id})")

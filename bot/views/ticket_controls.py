@@ -33,8 +33,9 @@ class TicketActionBase(Select):
         if not ticket:
             # Run rich diagnostics to explain why the lookup failed
             import os
-            db_exists = os.path.exists(db.db_path)
-            db_size = os.path.getsize(db.db_path) if db_exists else 0
+            db_path_val = getattr(db, "db_path", "database/tickets.db")
+            db_exists = os.path.exists(db_path_val)
+            db_size = os.path.getsize(db_path_val) if db_exists else 0
             
             # Count how many tickets are in DB
             try:
