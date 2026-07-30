@@ -38,16 +38,16 @@ class AdminCog(commands.Cog):
 
     @app_commands.command(name="set_log_channel", description="تعيين قناة سجلات العمليات (Logs) / Set action logs channel")
     async def set_log_channel(self, interaction: discord.Interaction, channel: discord.TextChannel):
-        if not interaction.user.guild_permissions.administrator:
-            return await interaction.response.send_message("❌ تحتاج إلى صلاحيات المسؤول لتنفيذ هذا الأمر.", ephemeral=True)
+        if not PermissionHandler.is_admin(interaction.user):
+            return await interaction.response.send_message("❌ تحتاج إلى صلاحيات الإدارة لتنفيذ هذا الأمر.", ephemeral=True)
 
         db.set_guild_setting(interaction.guild_id, "log_channel_id", channel.id)
         await interaction.response.send_message(f"✅ تم تعيين قناة **سجلات العمليات** بنجاح إلى: {channel.mention}", ephemeral=True)
 
     @app_commands.command(name="set_transcript_channel", description="تعيين قناة سجلات المحادثات (Transcripts) / Set transcripts channel")
     async def set_transcript_channel(self, interaction: discord.Interaction, channel: discord.TextChannel):
-        if not interaction.user.guild_permissions.administrator:
-            return await interaction.response.send_message("❌ تحتاج إلى صلاحيات المسؤول لتنفيذ هذا الأمر.", ephemeral=True)
+        if not PermissionHandler.is_admin(interaction.user):
+            return await interaction.response.send_message("❌ تحتاج إلى صلاحيات الإدارة لتنفيذ هذا الأمر.", ephemeral=True)
 
         db.set_guild_setting(interaction.guild_id, "transcript_channel_id", channel.id)
         await interaction.response.send_message(f"✅ تم تعيين قناة **سجلات المحادثات (Scripts)** بنجاح إلى: {channel.mention}", ephemeral=True)
@@ -82,8 +82,8 @@ class AdminCog(commands.Cog):
         min_rank: int,
         role: discord.Role = None
     ):
-        if not interaction.user.guild_permissions.administrator:
-            return await interaction.response.send_message("❌ Administrator permission required.", ephemeral=True)
+        if not PermissionHandler.is_admin(interaction.user):
+            return await interaction.response.send_message("❌ Admin privileges required.", ephemeral=True)
 
         allowed_roles = [role.id] if role else []
         db.set_action_permission(interaction.guild_id, action_name, min_rank=min_rank, allowed_roles=allowed_roles)

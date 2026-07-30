@@ -72,6 +72,11 @@ class TicketActionBase(Select):
             if not PermissionHandler.is_staff(member) and not PermissionHandler.is_bot_owner(member.id):
                 return await interaction.response.send_message("❌ عفواً! هذه الخيارات والأوامر مخصصة فقط لإدارة وطاقم الدعم الفني.", ephemeral=True)
 
+            # Restrict Evidence management and critical system actions to Admin rank
+            if action in ["toggle_evidence", "view_evidence", "delete", "audit_log", "generate_transcript"]:
+                if not PermissionHandler.is_admin(member) and not PermissionHandler.is_bot_owner(member.id):
+                    return await interaction.response.send_message("❌ عفواً! هذا الخيار مخصص فقط لمسؤولي الإدارة (Admin).", ephemeral=True)
+
             if action not in ["claim"] and not claimed_by:
                 user_rank = PermissionHandler.get_member_rank(member)
                 if user_rank < PermissionHandler.ROLE_HIERARCHY["admin"] and not PermissionHandler.is_bot_owner(member.id):

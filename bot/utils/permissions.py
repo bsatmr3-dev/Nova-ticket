@@ -86,21 +86,23 @@ class PermissionHandler:
             
             for setting_key, rank_key in role_mappings:
                 role_id = settings.get(setting_key)
-                if role_id and str(role_id).isdigit() and int(role_id) in user_role_ids:
+                if role_id and int(role_id) in user_role_ids:
                     return PermissionHandler.ROLE_HIERARCHY[rank_key]
         
         # Fallback to keywords check
         max_rank = PermissionHandler.ROLE_HIERARCHY["member"]
         for role in member.roles:
             role_name = role.name.lower()
-            if "manager" in role_name:
+            if any(k in role_name for k in ["owner", "اونر", "مالك"]):
+                max_rank = max(max_rank, PermissionHandler.ROLE_HIERARCHY["owner"])
+            elif "manager" in role_name or "مسؤول" in role_name:
                 max_rank = max(max_rank, PermissionHandler.ROLE_HIERARCHY["support_manager"])
-            elif "senior" in role_name or "سينيور" in role_name:
+            elif any(k in role_name for k in ["senior", "سينيور", "خبير"]):
                 max_rank = max(max_rank, PermissionHandler.ROLE_HIERARCHY["senior_support"])
-            elif "support" in role_name or "دعم" in role_name:
-                max_rank = max(max_rank, PermissionHandler.ROLE_HIERARCHY["support"])
-            elif "admin" in role_name or "إدارة" in role_name or "ادارة" in role_name:
+            elif any(k in role_name for k in ["admin", "إدارة", "ادارة", "مشرف"]):
                 max_rank = max(max_rank, PermissionHandler.ROLE_HIERARCHY["admin"])
+            elif any(k in role_name for k in ["support", "دعم", "مساعد"]):
+                max_rank = max(max_rank, PermissionHandler.ROLE_HIERARCHY["support"])
                 
         return max_rank
 

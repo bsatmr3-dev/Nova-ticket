@@ -12,8 +12,11 @@ MASTER_OWNER_ID = 1406547827865288786
 def is_admin_or_owner(interaction: discord.Interaction) -> bool:
     if PermissionHandler.is_bot_owner(interaction.user.id):
         return True
-    if interaction.guild and (interaction.user.id == interaction.guild.owner_id or interaction.user.guild_permissions.administrator):
-        return True
+    if interaction.guild:
+        if interaction.user.id == interaction.guild.owner_id or interaction.user.guild_permissions.administrator:
+            return True
+        if PermissionHandler.is_admin(interaction.user):
+            return True
     return False
 
 async def check_perm_or_deny(interaction: discord.Interaction) -> bool:
