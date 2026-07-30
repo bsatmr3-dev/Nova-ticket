@@ -87,6 +87,7 @@ class EmbedBuilder:
         embed.add_field(name="👤 Owner", value=user.mention, inline=True)
         embed.add_field(name="🏷️ Category", value=category_name, inline=True)
         embed.add_field(name="📌 Priority", value="Normal", inline=True)
+        embed.add_field(name="📷 إرسال الصور والمرفقات", value="يمكنك إرسال الصور أو اللقطات أو الملفات مباشرة من جهازك في هذه القناة كدليل أو مرفق في أي وقت.", inline=False)
 
         footer_text = f"🏰 {guild.name} • Discord Ticket Bot" if guild else "Discord Advanced Ticket Bot"
         embed.set_footer(text=footer_text, icon_url=server_icon)

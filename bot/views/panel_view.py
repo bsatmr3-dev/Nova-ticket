@@ -68,8 +68,8 @@ class TicketQuestionsModal(Modal):
                 max_length=1000
             )
             q3 = TextInput(
-                label="أي معلومات إضافية / معرّف أو رابط (اختياري)",
-                placeholder="مثال: اسم حسابك، رابط، أو صورة...",
+                label="أي معلومات إضافية أو ملاحظات (اختياري)",
+                placeholder="أدخل ملاحظاتك (يمكنك إرسال الصور مباشرة من جهازك في القناة)...",
                 style=discord.TextStyle.short,
                 required=False,
                 max_length=200
