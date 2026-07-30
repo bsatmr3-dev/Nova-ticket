@@ -31,6 +31,11 @@ class TransferTicketModal(Modal):
             return await interaction.response.send_message("❌ لم يتم العثور على الموظف المحدد.", ephemeral=True)
 
         db.claim_ticket(interaction.channel_id, target_member.id)
+        db.increment_staff_tickets(interaction.guild_id, target_member.id)
+        
+        # Award category points on transfer if desired (optional, but consistent)
+        if self.ticket and self.ticket.get("category_points"):
+            db.update_staff_points(interaction.guild_id, target_member.id, self.ticket.get("category_points", 0))
         
         embed = EmbedBuilder.create_embed(
             title="🔄 تم نقل التذكرة",

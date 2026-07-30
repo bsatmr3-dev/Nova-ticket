@@ -124,6 +124,12 @@ class TicketActionBase(Select):
                 return await interaction.followup.send("❌ لا يمكنك استلام تذكرتك الخاصة!", ephemeral=True)
 
             db.claim_ticket(interaction.channel_id, member.id)
+            db.increment_staff_tickets(guild.id, member.id)
+            
+            # Award category points on claim
+            category_points = ticket.get("category_points", 0)
+            if category_points > 0:
+                db.update_staff_points(guild.id, member.id, category_points)
             
             settings = db.get_guild_settings(guild.id) or {}
             staff_roles = [settings.get("support_role_id"), settings.get("senior_support_role_id"), settings.get("admin_role_id"), settings.get("support_manager_role_id"), settings.get("owner_role_id")]
@@ -188,9 +194,9 @@ class TicketActionBase(Select):
             except Exception as e:
                 print(f"Error sending transcript on close: {e}")
 
-            # Send rating view to ticket owner
-            staff_id = ticket.get("claimed_by") or member.id
-            if owner and ticket_user_id:
+            # Send rating view to ticket owner if claimed
+            staff_id = ticket.get("claimed_by")
+            if owner and ticket_user_id and staff_id:
                 from bot.views.rating_view import RatingView
                 try:
                     staff_member = guild.get_member(staff_id)
@@ -431,8 +437,8 @@ class TicketActionBase(Select):
                     except Exception:
                         owner = None
 
-            staff_id = ticket.get("claimed_by") or member.id
-            if owner and ticket_user_id:
+            staff_id = ticket.get("claimed_by")
+            if owner and ticket_user_id and staff_id:
                 from bot.views.rating_view import RatingView
                 try:
                     staff_member = guild.get_member(staff_id)

@@ -74,6 +74,12 @@ class TicketManagementCog(commands.Cog):
         await interaction.response.defer()
         
         db.claim_ticket(interaction.channel_id, interaction.user.id)
+        db.increment_staff_tickets(interaction.guild_id, interaction.user.id)
+        
+        # Award category points on claim
+        category_points = ticket.get("category_points", 0)
+        if category_points > 0:
+            db.update_staff_points(interaction.guild_id, interaction.user.id, category_points)
         
         # Update permissions
         guild = interaction.guild
@@ -159,9 +165,9 @@ class TicketManagementCog(commands.Cog):
         except Exception as e:
             print(f"Error sending transcript on close_ticket: {e}")
 
-        # Send rating DM to owner
-        staff_id = ticket.get("claimed_by") or member.id
-        if owner and ticket_user_id:
+        # Send rating DM to owner if ticket was claimed
+        staff_id = ticket.get("claimed_by")
+        if owner and ticket_user_id and staff_id:
             from bot.views.rating_view import RatingView
             try:
                 staff_member = guild.get_member(staff_id)
@@ -342,8 +348,8 @@ class TicketManagementCog(commands.Cog):
                 except Exception:
                     owner = None
 
-        staff_id = ticket.get("claimed_by") or member.id
-        if owner and ticket_user_id:
+        staff_id = ticket.get("claimed_by")
+        if owner and ticket_user_id and staff_id:
             from bot.views.rating_view import RatingView
             try:
                 staff_member = guild.get_member(staff_id)
