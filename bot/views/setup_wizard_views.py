@@ -164,28 +164,28 @@ class CategoryInfoModal(Modal):
             required=False,
             max_length=1000
         )
-        self.max_tickets = TextInput(
-            label="الحد الأقصى للتذاكر لكل عضو",
-            default=str(existing_cat.get("max_tickets", 1)),
+        self.points_input = TextInput(
+            label="عدد النقاط عند الإغلاق (Points)",
+            default=str(existing_cat.get("points", 5)),
             required=True,
-            max_length=2
+            max_length=4
         )
 
         self.add_item(self.cat_name)
         self.add_item(self.cat_desc)
         self.add_item(self.cat_emoji)
         self.add_item(self.welcome_msg)
-        self.add_item(self.max_tickets)
+        self.add_item(self.points_input)
 
     async def on_submit(self, interaction: discord.Interaction):
         if not await check_perm_or_deny(interaction):
             return
 
         try:
-            m_val = int(self.max_tickets.value.strip())
-            m_val = max(1, m_val)
+            p_val = int(self.points_input.value.strip())
+            p_val = max(0, p_val)
         except ValueError:
-            m_val = 1
+            p_val = 5
 
         cat_data = {
             "id": f"cat_{self.session.current_cat_index + 1}",
@@ -193,9 +193,10 @@ class CategoryInfoModal(Modal):
             "description": self.cat_desc.value.strip(),
             "emoji": self.cat_emoji.value.strip() or "🎫",
             "welcome_msg": self.welcome_msg.value.strip(),
-            "max_tickets": m_val,
-            "category_id": None,
-            "support_role_ids": [],
+            "points": p_val,
+            "max_tickets": existing_cat.get("max_tickets", 1),
+            "category_id": existing_cat.get("category_id"),
+            "support_role_ids": existing_cat.get("support_role_ids", []),
             "enabled": True
         }
 
@@ -501,6 +502,7 @@ def build_summary_embed(session: PanelCreationState, guild: discord.Guild) -> di
             f"• **الوصف:** {cat['description']}\n"
             f"• **التصنيف:** {cat_ch_str}\n"
             f"• **رتب الدعم:** {roles_str}\n"
+            f"• **النقاط:** `{cat.get('points', 5)}` نقطة\n"
             f"• **الحد الأقصى:** `{cat.get('max_tickets', 1)}` تذكرة لكل عضو"
         )
         embed.add_field(name=f"{cat['emoji']} القسم {idx}: {cat['name']}", value=val_text, inline=False)
@@ -827,18 +829,18 @@ class CategoryEditModal(Modal):
             required=False,
             max_length=1000
         )
-        self.max_input = TextInput(
-            label="الحد الأقصى للتذاكر للعضو",
-            default=str(category_data.get("max_tickets", 1)),
+        self.points_input = TextInput(
+            label="عدد النقاط عند الإغلاق (Points)",
+            default=str(category_data.get("points", 5)),
             required=True,
-            max_length=2
+            max_length=4
         )
 
         self.add_item(self.name_input)
         self.add_item(self.desc_input)
         self.add_item(self.emoji_input)
         self.add_item(self.welcome_input)
-        self.add_item(self.max_input)
+        self.add_item(self.points_input)
 
     async def on_submit(self, interaction: discord.Interaction):
         if not await check_perm_or_deny(interaction):
@@ -850,9 +852,9 @@ class CategoryEditModal(Modal):
         self.category_data["welcome_msg"] = self.welcome_input.value.strip()
 
         try:
-            self.category_data["max_tickets"] = max(1, int(self.max_input.value.strip()))
+            self.category_data["points"] = max(0, int(self.points_input.value.strip()))
         except ValueError:
-            self.category_data["max_tickets"] = 1
+            self.category_data["points"] = 5
 
         await interaction.response.send_message(f"✅ **تم تحديث بيانات القسم `{self.category_data['name']}`.**", ephemeral=True)
 
@@ -1064,6 +1066,7 @@ class InteractivePanelEditorView(View):
                     f"• **الوصف:** {c.get('description')}\n"
                     f"• **التصنيف:** {cat_ch}\n"
                     f"• **الرتب المسؤولة:** {roles_str}\n"
+                    f"• **النقاط:** `{c.get('points', 5)}` نقطة\n"
                     f"• **حد التذاكر:** `{c.get('max_tickets', 1)}`"
                 ),
                 inline=False

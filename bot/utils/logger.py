@@ -38,6 +38,20 @@ class TicketLogger:
             return
 
         # 3. Create Embed Log
+        # Resolve category name & emoji
+        cat_display = ticket.get("category_id", "عام")
+        panel_id = ticket.get("panel_id")
+        if panel_id:
+            panel = db.get_panel_by_id(panel_id)
+            if panel and panel.get("categories"):
+                for cat in panel.get("categories", []):
+                    if str(cat.get("id")) == str(ticket.get("category_id")):
+                        emoji = cat.get("emoji", "📁")
+                        c_name = cat.get("name", "")
+                        if c_name:
+                            cat_display = f"{emoji} {c_name}"
+                        break
+
         embed = EmbedBuilder.create_embed(
             title=f"📋 [سجل التذاكر] {action_name}",
             description=f"تم تنفيذ إجراء جديد على التذكرة **#{ticket_id}**",
@@ -45,7 +59,7 @@ class TicketLogger:
         )
         embed.add_field(name="🎫 التذكرة", value=f"<#{ticket.get('channel_id')}>", inline=True)
         embed.add_field(name="👤 المنفذ", value=executor.mention, inline=True)
-        embed.add_field(name="📂 القسم", value=ticket.get("category_id", "عام"), inline=True)
+        embed.add_field(name="📂 القسم", value=cat_display, inline=True)
         
         if details:
             embed.add_field(name="📝 التفاصيل", value=details, inline=False)

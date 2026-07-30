@@ -76,12 +76,18 @@ class EmbedBuilder:
         title = get_text("ticket_welcome_title", lang=lang)
         desc = get_text("ticket_welcome_desc", lang=lang, user=user.mention)
         embed = discord.Embed(title=f"🎫 {title} - {category_name}", description=desc, color=EmbedBuilder.COLOR_INFO)
-        embed.set_thumbnail(url=user.display_avatar.url)
+        
+        # Member avatar as author icon at top
+        embed.set_author(name=f"تذكرة العضو: {user.display_name}", icon_url=user.display_avatar.url)
+        
+        # Server icon / thumbnail on the right side of the embed
+        server_icon = guild.icon.url if (guild and guild.icon) else user.display_avatar.url
+        embed.set_thumbnail(url=server_icon)
+
         embed.add_field(name="👤 Owner", value=user.mention, inline=True)
         embed.add_field(name="🏷️ Category", value=category_name, inline=True)
         embed.add_field(name="📌 Priority", value="Normal", inline=True)
 
-        server_icon = guild.icon.url if (guild and guild.icon) else None
         footer_text = f"🏰 {guild.name} • Discord Ticket Bot" if guild else "Discord Advanced Ticket Bot"
         embed.set_footer(text=footer_text, icon_url=server_icon)
         return embed
