@@ -213,6 +213,26 @@ class TicketBot(commands.Bot):
                 # Tracking member response
                 db.set_member_responded(message.channel.id)
 
+            # 3. Evidence Collection (Automatic)
+            if message.attachments and db.is_evidence_enabled(message.channel.id):
+                saved_count = 0
+                for attachment in message.attachments:
+                    if any(attachment.filename.lower().endswith(ext) for ext in [".png", ".jpg", ".jpeg", ".webp", ".gif"]):
+                        db.add_evidence(
+                            ticket_id=ticket.get("id", 0),
+                            channel_id=message.channel.id,
+                            user_id=message.author.id,
+                            evidence_url=attachment.url,
+                            note=f"دليل تلقائي: {attachment.filename}"
+                        )
+                        saved_count += 1
+                
+                if saved_count > 0:
+                    try:
+                        await message.add_reaction("📸")
+                    except:
+                        pass
+
         await self.process_commands(message)
 
 async def main():

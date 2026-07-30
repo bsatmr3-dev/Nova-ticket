@@ -227,7 +227,17 @@ class DatabaseManager:
                     is_hidden {int_type} DEFAULT 0,
                     last_staff_message_at {text_type},
                     member_responded {int_type} DEFAULT 1,
-                    category_points {int_type} DEFAULT 0
+                    category_points {int_type} DEFAULT 0,
+                    evidence_enabled {int_type} DEFAULT 1
+                )""",
+                f"""CREATE TABLE IF NOT EXISTS ticket_evidence (
+                    id {pk_type},
+                    ticket_id {int_type} NOT NULL,
+                    channel_id BIGINT NOT NULL,
+                    user_id BIGINT NOT NULL,
+                    evidence_url {text_type} NOT NULL,
+                    note {text_type},
+                    created_at {text_type} NOT NULL
                 )""",
                 f"""CREATE TABLE IF NOT EXISTS ratings (
                     id {pk_type},
@@ -317,6 +327,14 @@ class DatabaseManager:
                     """)
                     if not cursor.fetchone():
                         cursor.execute("ALTER TABLE tickets ADD COLUMN category_points INTEGER DEFAULT 0;")
+
+                    cursor.execute("""
+                        SELECT column_name 
+                        FROM information_schema.columns 
+                        WHERE table_name='tickets' AND column_name='evidence_enabled';
+                    """)
+                    if not cursor.fetchone():
+                        cursor.execute("ALTER TABLE tickets ADD COLUMN evidence_enabled INTEGER DEFAULT 1;")
                 except Exception as e:
                     sys.stderr.write(f"[DB_MIGRATION] Migration check failed: {e}\n")
             else:
@@ -325,6 +343,8 @@ class DatabaseManager:
                     cols = [row[1] for row in cursor.fetchall()]
                     if "category_points" not in cols:
                         cursor.execute("ALTER TABLE tickets ADD COLUMN category_points INTEGER DEFAULT 0;")
+                    if "evidence_enabled" not in cols:
+                        cursor.execute("ALTER TABLE tickets ADD COLUMN evidence_enabled INTEGER DEFAULT 1;")
                 except Exception as e:
                     sys.stderr.write(f"[DB_MIGRATION] SQLite migration check failed: {e}\n")
 
@@ -517,6 +537,29 @@ class DatabaseManager:
 
     def update_ticket_owner(self, channel_id: int, new_user_id: int):
         self._run_query("UPDATE tickets SET user_id = ? WHERE channel_id = ?", (new_user_id, channel_id))
+
+    # --- Evidence Operations ---
+    def add_evidence(self, ticket_id: int, channel_id: int, user_id: int, evidence_url: str, note: str = None) -> int:
+        return self._run_query("""
+        INSERT INTO ticket_evidence (ticket_id, channel_id, user_id, evidence_url, note, created_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """, (ticket_id, channel_id, user_id, evidence_url, note or "", datetime.utcnow().isoformat()), fetch="lastrowid") or 1
+
+    def get_ticket_evidence(self, ticket_id: int) -> List[Dict[str, Any]]:
+        return self._run_query("SELECT * FROM ticket_evidence WHERE ticket_id = ? ORDER BY id ASC", (ticket_id,), fetch="all") or []
+
+    def is_evidence_enabled(self, channel_id: int) -> bool:
+        row = self._run_query("SELECT evidence_enabled FROM tickets WHERE channel_id = ?", (channel_id,), fetch="one")
+        if row and isinstance(row, dict):
+            val = row.get("evidence_enabled")
+            return val != 0
+        return True
+
+    def toggle_ticket_evidence(self, channel_id: int) -> bool:
+        current = self.is_evidence_enabled(channel_id)
+        new_state = 0 if current else 1
+        self._run_query("UPDATE tickets SET evidence_enabled = ? WHERE channel_id = ?", (new_state, channel_id))
+        return bool(new_state)
 
     # --- Audit Logs ---
     def log_audit_event(self, ticket_id: int, action: str, executor_id: int, details: str = None):

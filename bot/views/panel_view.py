@@ -139,7 +139,19 @@ class TicketQuestionsModal(Modal):
 
             await ticket_channel.send(content=ping_content, embed=welcome_embed, view=control_view)
 
-            # 6. Send DM confirmation
+            # 6. Evidence Prompt
+            evidence_prompt = EmbedBuilder.create_embed(
+                title="📸 إرفاق الأدلة والصور",
+                description=(
+                    f"مرحباً {interaction.user.mention}، يرجى إرسال أي صور أو سكرين شوت (Screenshot) "
+                    "متعلقة بطلبك مباشرة هنا في القناة ليتم حفظها في ملف التذكرة تلقائياً.\n\n"
+                    "💡 يمكنك أيضاً الضغط على **إضافة دليل** من القائمة المنسدلة في أي وقت."
+                ),
+                color=EmbedBuilder.COLOR_INFO
+            )
+            await ticket_channel.send(embed=evidence_prompt)
+
+            # 7. Send DM confirmation
             try:
                 dm_embed = discord.Embed(
                     title="🎫 تم فتح تذكرتك بنجاح!",

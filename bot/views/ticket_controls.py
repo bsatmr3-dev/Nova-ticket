@@ -11,7 +11,7 @@ from bot.utils.logger import TicketLogger
 from bot.views.modal_views import (
     TransferTicketModal, ChangePriorityModal, RenameTicketModal,
     ChangeDepartmentModal, ChangeOwnerModal, AddMemberModal,
-    RemoveMemberModal, InternalNoteModal, RatingModal
+    RemoveMemberModal, InternalNoteModal, RatingModal, AddEvidenceModal
 )
 
 # 1. Base Class for Action Handling
@@ -64,7 +64,8 @@ class TicketActionBase(Select):
         staff_actions = [
             "claim", "unclaim", "transfer", "toggle_hide", "department", "priority",
             "lock", "unlock", "hold", "resume", "hold_resume", "toggle_hold", "add_note",
-            "audit_log", "generate_transcript", "delete", "rename", "summon_member", "owner"
+            "audit_log", "generate_transcript", "delete", "rename", "summon_member", "owner",
+            "toggle_evidence", "view_evidence"
         ]
         
         if action in staff_actions:
@@ -84,9 +85,13 @@ class TicketActionBase(Select):
         if action != "restart" and not PermissionHandler.can_execute_action(guild, member, action, ticket_user_id, ticket_data=ticket):
             return await interaction.response.send_message(get_text("permission_denied", self.lang), ephemeral=True)
 
-        if action in ["transfer", "priority", "rename", "department", "owner", "add_member", "remove_member", "add_note", "rate_staff"]:
+        if action in ["transfer", "priority", "rename", "department", "owner", "add_member", "remove_member", "add_note", "rate_staff", "add_evidence"]:
             # These open modals, cannot defer
-            if action == "rate_staff":
+            if action == "add_evidence":
+                if not db.is_evidence_enabled(interaction.channel_id):
+                    return await interaction.response.send_message("⚠️ ميزة إضافة الأدلة معطلة لهذه التذكرة حالياً من قبل الإدارة.", ephemeral=True)
+                await interaction.response.send_modal(AddEvidenceModal(ticket, self.lang))
+            elif action == "rate_staff":
                 if not ticket.get("claimed_by"):
                     return await interaction.response.send_message("⚠️ لا يمكن تقييم التذكرة لأنها لم تُستلم من قبل أي موظف بعد.", ephemeral=True)
                 if member.id != ticket_user_id:
@@ -344,6 +349,61 @@ class TicketActionBase(Select):
             log_text = "\n".join([f"• {a['action']} بواسطة <@{a['executor_id']}>" for a in audits[-10:]])
             await interaction.followup.send(f"📜 **سجل العمليات الأخير:**\n{log_text or 'لا توجد عمليات مسجلة.'}", ephemeral=True)
 
+        elif action == "toggle_evidence":
+            new_state = db.toggle_ticket_evidence(interaction.channel_id)
+            status_str = "مفعّلة ✅" if new_state else "معطّلة ❌"
+            embed = EmbedBuilder.create_embed(
+                title="⚙️ حالة ميزة الأدلة والصور",
+                description=f"تم تعديل ميزة استقبال وتسجيل الأدلة لهذه التذكرة لتصبح: **{status_str}**",
+                color=EmbedBuilder.COLOR_SUCCESS if new_state else EmbedBuilder.COLOR_WARNING
+            )
+            await interaction.followup.send(embed=embed)
+            await TicketLogger.log_action(guild, ticket, "تغيير حالة الأدلة", member, details=f"أصبحت: {status_str}")
+
+        elif action == "view_evidence":
+            evidence_list = db.get_ticket_evidence(ticket.get("id", 0))
+            if not evidence_list:
+                embed = EmbedBuilder.create_embed(
+                    title="📸 قائمة أدلة ومرفقات التذكرة",
+                    description="📷 لم يتم تسجيل أو إرفاق أي أدلة لهذه التذكرة حتى الآن.",
+                    color=EmbedBuilder.COLOR_INFO
+                )
+                return await interaction.followup.send(embed=embed, ephemeral=True)
+
+            embed = EmbedBuilder.create_embed(
+                title=f"📸 قائمة الأدلة والمرفقات للتذكرة #{ticket.get('id')}",
+                description=f"إجمالي الأدلة المسجلة: **{len(evidence_list)}** دليلاً\n\n",
+                color=EmbedBuilder.COLOR_PRIMARY
+            )
+            
+            for idx, item in enumerate(evidence_list, 1):
+                u_id = item.get("user_id")
+                url = item.get("evidence_url")
+                note = item.get("note")
+                dt_str = item.get("created_at", "")
+                
+                try:
+                    if isinstance(dt_str, str) and "T" in dt_str:
+                        from datetime import datetime
+                        ts = int(datetime.fromisoformat(dt_str).timestamp())
+                        time_fmt = f"<t:{ts}:R>"
+                    else:
+                        time_fmt = dt_str
+                except:
+                    time_fmt = dt_str
+
+                val = f"👤 بواسطة: <@{u_id}> ({time_fmt})\n🔗 [رابط الدليل / الصورة]({url})"
+                if note:
+                    val += f"\n📝 ملاحظة: {note}"
+                
+                embed.add_field(name=f"دليل #{idx}", value=val, inline=False)
+
+            latest_url = evidence_list[-1].get("evidence_url")
+            if latest_url and (latest_url.startswith("http://") or latest_url.startswith("https://")):
+                embed.set_image(url=latest_url)
+
+            await interaction.followup.send(embed=embed)
+
         elif action == "generate_transcript":
             from bot.utils.transcript_generator import TranscriptGenerator
             await TranscriptGenerator.send_transcript(interaction.channel, ticket, guild, interaction)
@@ -403,6 +463,7 @@ class MemberActionsSelect(TicketActionBase):
     def __init__(self, ticket: dict, lang: str = "ar"):
         super().__init__(ticket=ticket, lang=lang, placeholder="👤 أوامر العضو", options=[
             discord.SelectOption(label="إغلاق التذكرة", value="close", emoji="🔒"),
+            discord.SelectOption(label="إضافة دليل", value="add_evidence", emoji="📸"),
             discord.SelectOption(label="تقييم الإداري", value="rate_staff", emoji="⭐"),
             discord.SelectOption(label="نداء الدعم", value="summon_staff", emoji="🔔"),
             discord.SelectOption(label="إضافة عضو", value="add_member", emoji="➕"),
@@ -419,6 +480,7 @@ class StaffManagementSelect(TicketActionBase):
             discord.SelectOption(label="نقل التذكرة", value="transfer", emoji="🔄"),
             discord.SelectOption(label="تغيير اسم التذكرة", value="rename", emoji="✏️"),
             discord.SelectOption(label="نداء صاحب التذكرة", value="summon_member", emoji="🔔"),
+            discord.SelectOption(label="عرض الأدلة", value="view_evidence", emoji="📸"),
             discord.SelectOption(label="إخفاء/إظهار", value="toggle_hide", emoji="👁️"),
             discord.SelectOption(label="تغيير القسم", value="department", emoji="🏢"),
             discord.SelectOption(label="تغيير الأولوية", value="priority", emoji="⚡"),
@@ -432,6 +494,7 @@ class StaffSystemSelect(TicketActionBase):
             discord.SelectOption(label="تعليق/استئناف", value="hold_resume", emoji="⏸️"),
             discord.SelectOption(label="ملاحظة داخلية", value="add_note", emoji="📝"),
             discord.SelectOption(label="سجل العمليات", value="audit_log", emoji="📜"),
+            discord.SelectOption(label="تعطيل/تفعيل الأدلة", value="toggle_evidence", emoji="🚫"),
             discord.SelectOption(label="Transcript", value="generate_transcript", emoji="📄"),
             discord.SelectOption(label="حذف نهائي", value="delete", emoji="🗑️"),
             discord.SelectOption(label="🔄 ريستارت / إعادة تحديث القائمة", value="restart", emoji="🔄")

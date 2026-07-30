@@ -381,3 +381,65 @@ class RatingModal(Modal):
             executor=interaction.user,
             details=f"التقييم: {num_stars}/5 ★ | التعليق: {self.feedback_input.value or 'لا يوجد'}"
         )
+
+class AddEvidenceModal(Modal):
+    def __init__(self, ticket: dict, lang: str = "ar"):
+        super().__init__(title="📸 إضافة دليل للتذكرة")
+        self.ticket = ticket
+        self.lang = lang
+
+        self.url_input = TextInput(
+            label="رابط الصورة أو الدليل (Image / Evidence URL)",
+            placeholder="https://cdn.discordapp.com/attachments/.../image.png",
+            required=True,
+            max_length=500
+        )
+        self.note_input = TextInput(
+            label="توضيح أو وصف للدليل (اختياري)",
+            placeholder="اكتب توضيحاً مختصراً للشاشة أو المستند...",
+            style=discord.TextStyle.paragraph,
+            required=False,
+            max_length=500
+        )
+        self.add_item(self.url_input)
+        self.add_item(self.note_input)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        url = self.url_input.value.strip()
+        note = self.note_input.value.strip()
+
+        if not (url.startswith("http://") or url.startswith("https://")):
+            return await interaction.response.send_message("❌ يرجى إدخال رابط صحيح يبدأ بـ http:// أو https://", ephemeral=True)
+
+        if not db.is_evidence_enabled(interaction.channel_id):
+            return await interaction.response.send_message("⚠️ ميزة إضافة الأدلة معطلة لهذه التذكرة حالياً من قبل الإدارة.", ephemeral=True)
+
+        ticket_id = self.ticket.get("id", 0)
+        db.add_evidence(
+            ticket_id=ticket_id,
+            channel_id=interaction.channel_id,
+            user_id=interaction.user.id,
+            evidence_url=url,
+            note=note
+        )
+
+        embed = EmbedBuilder.create_embed(
+            title="📸 تم تسجيل الدليل بنجاح",
+            description=f"تم إدراج الدليل الجديد في أرشيف التذكرة بواسطة {interaction.user.mention}.",
+            color=EmbedBuilder.COLOR_SUCCESS
+        )
+        if note:
+            embed.add_field(name="📝 التوضيح:", value=note, inline=False)
+        embed.set_image(url=url)
+        embed.set_footer(text=f"المُضيف: {interaction.user.display_name}", icon_url=interaction.user.display_avatar.url if interaction.user.display_avatar else None)
+
+        await interaction.response.send_message(embed=embed)
+
+        await TicketLogger.log_action(
+            guild=interaction.guild,
+            ticket=self.ticket,
+            action_name="إضافة دليل",
+            executor=interaction.user,
+            details=f"رابط الدليل: {url} | ملاحظة: {note or 'بدون'}"
+        )
+
