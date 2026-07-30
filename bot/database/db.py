@@ -1,4 +1,3 @@
-import sqlite3
 import json
 import os
 import sys
@@ -13,90 +12,93 @@ except ImportError:
     HAS_POSTGRES = False
 
 class DatabaseManager:
-    def __init__(self, db_path: str = None):
-        if not db_path:
-            try:
-                from bot.config.settings import Config
-                self.db_path = Config.DATABASE_PATH
-            except ImportError:
-                self.db_path = "database/tickets.db"
-        else:
-            self.db_path = db_path
-        
-        # Radical fix: ensure database path is absolute relative to bot root
-        if not os.path.isabs(self.db_path):
-            base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-            self.db_path = os.path.join(base_dir, self.db_path)
-            
+    def __init__(self):
         db_url = os.environ.get("DATABASE_URL")
-        self.is_postgres = HAS_POSTGRES and (db_url is not None and len(db_url.strip()) > 0)
+        if not db_url or not db_url.strip():
+            sys.stderr.write("[DB_CRITICAL_ERROR] DATABASE_URL environment variable is missing or empty! Bot requires PostgreSQL via DATABASE_URL (Supabase).\n")
+            raise ValueError("DATABASE_URL environment variable is required to connect to PostgreSQL.")
         
-        if not self.is_postgres:
-            os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
-            
+        if not HAS_POSTGRES:
+            sys.stderr.write("[DB_CRITICAL_ERROR] psycopg2 is not installed! Cannot connect to PostgreSQL.\n")
+            raise ImportError("psycopg2 package is required.")
+
+        sys.stderr.write("[DB_INFO] Bot is exclusively connected to PostgreSQL database using DATABASE_URL (Supabase).\n")
         try:
             self._init_db()
         except Exception as e:
-            sys.stderr.write(f"[DB_INIT_ERROR] Database initialization failed: {e}. Falling back to SQLite...\n")
-            self.is_postgres = False
-            os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
-            self._init_db()
+            sys.stderr.write(f"[DB_INIT_ERROR] Database initialization failed: {e}\n")
+            raise e
 
     def _get_connection(self):
-        if self.is_postgres:
-            db_url = os.environ.get("DATABASE_URL")
-            try:
-                if db_url and len(db_url.strip()) > 0:
-                    clean_url = db_url.strip()
-                    if clean_url.startswith("postgres://"):
-                        clean_url = clean_url.replace("postgres://", "postgresql://", 1)
-                    conn = psycopg2.connect(clean_url, connect_timeout=10)
-                    return conn
-                else:
-                    raise ValueError("DATABASE_URL environment variable is empty or not set.")
-            except Exception as e:
-                sys.stderr.write(f"Error connecting to Supabase PostgreSQL via DATABASE_URL: {e}\n")
-                self.is_postgres = False
-                os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
-                sys.stderr.write(f"[DB_CONNECTION] Fallback to SQLite DB file: {self.db_path} (Absolute: {os.path.abspath(self.db_path)})\n")
-                conn = sqlite3.connect(self.db_path)
-                conn.row_factory = sqlite3.Row
-                return conn
-        else:
-            # SQLite connection
-            sys.stderr.write(f"[DB_CONNECTION] Connecting to SQLite DB file: {self.db_path} (Absolute: {os.path.abspath(self.db_path)})\n")
-            conn = sqlite3.connect(self.db_path)
-            conn.row_factory = sqlite3.Row
-            return conn
+        db_url = os.environ.get("DATABASE_URL")
+        if not db_url or not db_url.strip():
+            raise ValueError("DATABASE_URL environment variable is empty or not set.")
+        clean_url = db_url.strip()
+        if clean_url.startswith("postgres://"):
+            clean_url = clean_url.replace("postgres://", "postgresql://", 1)
+        conn = psycopg2.connect(clean_url, connect_timeout=10)
+        return conn
 
-    def _execute(self, cursor, query, params=None):
-        if self.is_postgres:
+    def _run_query(self, query: str, params: tuple = (), fetch: str = None):
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
             # Convert ? placeholders to %s for PostgreSQL
             query = query.replace("?", "%s")
-            # Convert INSERT OR IGNORE / REPLACE
+            
+            # Convert SQLite-specific upsert syntax to PostgreSQL ON CONFLICT
             if "INSERT OR IGNORE" in query:
-                # This is a bit complex for a regex, but we can do a simple swap for specific cases
                 query = query.replace("INSERT OR IGNORE INTO", "INSERT INTO")
-                # We'd need ON CONFLICT DO NOTHING for real ignore, but let's stick to basic queries for now
-                # Or handle specifically
+                if "guild_settings" in query:
+                    query += " ON CONFLICT (guild_id) DO NOTHING"
+                elif "blacklist" in query:
+                    query += " ON CONFLICT (user_id) DO NOTHING"
+                elif "staff_stats" in query:
+                    query += " ON CONFLICT (guild_id, user_id) DO NOTHING"
             elif "INSERT OR REPLACE" in query:
                 query = query.replace("INSERT OR REPLACE INTO", "INSERT INTO")
-                # We'd need ON CONFLICT DO UPDATE
+                if "guild_settings" in query:
+                    query += " ON CONFLICT (guild_id) DO UPDATE SET guild_id = EXCLUDED.guild_id"
+                elif "blacklist" in query:
+                    query += " ON CONFLICT (user_id) DO UPDATE SET reason = EXCLUDED.reason, added_by = EXCLUDED.added_by, created_at = EXCLUDED.created_at"
+                elif "wizard_sessions" in query:
+                    query += " ON CONFLICT (user_id) DO UPDATE SET state_json = EXCLUDED.state_json, updated_at = EXCLUDED.updated_at"
+                elif "action_permissions" in query:
+                    query += " ON CONFLICT (guild_id, action_name) DO UPDATE SET min_rank = EXCLUDED.min_rank, allowed_roles_json = EXCLUDED.allowed_roles_json"
+
+            cursor.execute(query, params)
             
-        cursor.execute(query, params or ())
+            result = None
+            if fetch == "one":
+                row = cursor.fetchone()
+                result = dict(row) if row else None
+            elif fetch == "all":
+                rows = cursor.fetchall()
+                result = [dict(r) for r in rows]
+            elif fetch == "lastrowid":
+                try:
+                    cursor.execute("SELECT lastval()")
+                    row = cursor.fetchone()
+                    result = row['lastval'] if row else 0
+                except Exception:
+                    result = 0
+            
+            conn.commit()
+            return result
+        except Exception as e:
+            print(f"Query Error: {e} | Query: {query}")
+            return None
+        finally:
+            conn.close()
 
     def _init_db(self):
-        # We'll use a more robust approach for init
         conn = self._get_connection()
         try:
             cursor = conn.cursor()
-            
-            # Use appropriate SERIAL / AUTOINCREMENT
-            pk_type = "SERIAL PRIMARY KEY" if self.is_postgres else "INTEGER PRIMARY KEY AUTOINCREMENT"
+            pk_type = "SERIAL PRIMARY KEY"
             text_type = "TEXT"
             int_type = "INTEGER"
             
-            # Tables
             queries = [
                 f"""CREATE TABLE IF NOT EXISTS panels (
                     id {pk_type},
@@ -208,81 +210,18 @@ class DatabaseManager:
             for q in queries:
                 cursor.execute(q)
             
-            # Self-healing migration for tickets.category_points column
-            if self.is_postgres:
-                try:
-                    cursor.execute("""
-                        SELECT column_name 
-                        FROM information_schema.columns 
-                        WHERE table_name='tickets' AND column_name='category_points';
-                    """)
-                    if not cursor.fetchone():
-                        sys.stderr.write("[DB_MIGRATION] Adding missing column 'category_points' to PostgreSQL table 'tickets'\n")
-                        cursor.execute("ALTER TABLE tickets ADD COLUMN category_points INTEGER DEFAULT 0;")
-                except Exception as e:
-                    sys.stderr.write(f"[DB_MIGRATION] PostgreSQL migration check failed: {e}\n")
-            else:
-                try:
-                    cursor.execute("PRAGMA table_info(tickets)")
-                    columns = [row[1] for row in cursor.fetchall()]
-                    if "category_points" not in columns:
-                        sys.stderr.write("[DB_MIGRATION] Adding missing column 'category_points' to SQLite table 'tickets'\n")
-                        cursor.execute("ALTER TABLE tickets ADD COLUMN category_points INTEGER DEFAULT 0")
-                except Exception as e:
-                    sys.stderr.write(f"[DB_MIGRATION] SQLite migration check failed: {e}\n")
-
-            # Indexes
-            if not self.is_postgres:
-                cursor.execute("CREATE INDEX IF NOT EXISTS idx_tickets_user ON tickets(user_id, status)")
-                cursor.execute("CREATE INDEX IF NOT EXISTS idx_tickets_channel ON tickets(channel_id)")
-                cursor.execute("CREATE INDEX IF NOT EXISTS idx_ratings_staff ON ratings(staff_id)")
-                cursor.execute("CREATE INDEX IF NOT EXISTS idx_notes_ticket ON internal_notes(ticket_id)")
-                cursor.execute("CREATE INDEX IF NOT EXISTS idx_audit_ticket ON ticket_audit_logs(ticket_id)")
-                cursor.execute("CREATE INDEX IF NOT EXISTS idx_staff_stats ON staff_stats(guild_id, user_id)")
-
-            # Self-healing migration to synchronize staff rating statistics
+            # Migration check for category_points
             try:
-                cursor.execute("SELECT guild_id, user_id FROM staff_stats")
-                rows = cursor.fetchall()
-                for row in rows:
-                    try:
-                        g_id = row[0]
-                        u_id = row[1]
-                    except Exception:
-                        g_id = row["guild_id"]
-                        u_id = row["user_id"]
-
-                    cursor.execute("""
-                        SELECT COALESCE(SUM(r.stars), 0) as tot_stars, COUNT(r.id) as tot_ratings
-                        FROM ratings r
-                        JOIN tickets t ON r.ticket_id = t.id
-                        WHERE r.staff_id = ? AND t.guild_id = ?
-                    """ if not self.is_postgres else """
-                        SELECT COALESCE(SUM(r.stars), 0) as tot_stars, COUNT(r.id) as tot_ratings
-                        FROM ratings r
-                        JOIN tickets t ON r.ticket_id = t.id
-                        WHERE r.staff_id = %s AND t.guild_id = %s
-                    """, (u_id, g_id))
-
-                    res = cursor.fetchone()
-                    tot_stars = 0
-                    tot_ratings = 0
-                    if res:
-                        try:
-                            tot_stars = res[0]
-                            tot_ratings = res[1]
-                        except Exception:
-                            tot_stars = res.get("tot_stars", 0)
-                            tot_ratings = res.get("tot_ratings", 0)
-
-                    cursor.execute("""
-                        UPDATE staff_stats SET total_stars = ?, total_ratings = ? WHERE guild_id = ? AND user_id = ?
-                    """ if not self.is_postgres else """
-                        UPDATE staff_stats SET total_stars = %s, total_ratings = %s WHERE guild_id = %s AND user_id = %s
-                    """, (tot_stars, tot_ratings, g_id, u_id))
-                sys.stderr.write("[DB_MIGRATION] Recalculated and synchronized all staff ratings stats successfully.\n")
+                cursor.execute("""
+                    SELECT column_name 
+                    FROM information_schema.columns 
+                    WHERE table_name='tickets' AND column_name='category_points';
+                """)
+                if not cursor.fetchone():
+                    sys.stderr.write("[DB_MIGRATION] Adding missing column 'category_points' to PostgreSQL table 'tickets'\n")
+                    cursor.execute("ALTER TABLE tickets ADD COLUMN category_points INTEGER DEFAULT 0;")
             except Exception as e:
-                sys.stderr.write(f"[DB_MIGRATION] Staff ratings stats synchronization failed: {e}\n")
+                sys.stderr.write(f"[DB_MIGRATION] PostgreSQL migration check failed: {e}\n")
 
             conn.commit()
         except Exception as e:
@@ -291,79 +230,10 @@ class DatabaseManager:
         finally:
             conn.close()
 
-    def _get_row(self, row):
-        if self.is_postgres:
-            # RealDictCursor makes it a dict
-            return row
-        return dict(row)
-
-    # --- Generic Wrapper ---
-    def _run_query(self, query: str, params: tuple = (), fetch: str = None):
-        conn = self._get_connection()
-        try:
-            if self.is_postgres:
-                cursor = conn.cursor(cursor_factory=RealDictCursor)
-                query = query.replace("?", "%s")
-                # Handle specific SQL differences
-                if "INSERT OR IGNORE" in query:
-                    # Very basic translation, might need refinement
-                    query = query.replace("INSERT OR IGNORE INTO", "INSERT INTO")
-                    if "guild_settings" in query:
-                        query += " ON CONFLICT (guild_id) DO NOTHING"
-                    elif "blacklist" in query:
-                        query += " ON CONFLICT (user_id) DO NOTHING"
-                    elif "staff_stats" in query:
-                        query += " ON CONFLICT (guild_id, user_id) DO NOTHING"
-                elif "INSERT OR REPLACE" in query:
-                    query = query.replace("INSERT OR REPLACE INTO", "INSERT INTO")
-                    if "guild_settings" in query:
-                        query += " ON CONFLICT (guild_id) DO UPDATE SET guild_id = EXCLUDED.guild_id"
-                    elif "blacklist" in query:
-                        query += " ON CONFLICT (user_id) DO UPDATE SET reason = EXCLUDED.reason, added_by = EXCLUDED.added_by, created_at = EXCLUDED.created_at"
-                    elif "wizard_sessions" in query:
-                        query += " ON CONFLICT (user_id) DO UPDATE SET state_json = EXCLUDED.state_json, updated_at = EXCLUDED.updated_at"
-                    elif "action_permissions" in query:
-                        query += " ON CONFLICT (guild_id, action_name) DO UPDATE SET min_rank = EXCLUDED.min_rank, allowed_roles_json = EXCLUDED.allowed_roles_json"
-                
-                # Handle COALESCE difference for NULL in sqlite vs postgres
-                # SQLite: COALESCE(?, closed_at) -> Postgres needs casting sometimes or works fine
-            else:
-                cursor = conn.cursor()
-            
-            cursor.execute(query, params)
-            
-            result = None
-            if fetch == "one":
-                row = cursor.fetchone()
-                result = self._get_row(row) if row else None
-            elif fetch == "all":
-                rows = cursor.fetchall()
-                result = [self._get_row(r) for r in rows]
-            elif fetch == "lastrowid":
-                if self.is_postgres:
-                    # Postgres doesn't have lastrowid on cursor easily, often uses RETURNING
-                    # But for simple insert, we can try
-                    try:
-                        cursor.execute("SELECT lastval()")
-                        result = cursor.fetchone()['lastval']
-                    except:
-                        result = 0
-                else:
-                    result = cursor.lastrowid
-            
-            conn.commit()
-            return result
-        except Exception as e:
-            print(f"Query Error: {e} | Query: {query}")
-            return None
-        finally:
-            conn.close()
-
     # --- Panel Operations ---
     def save_panel(self, title: str, description: str, color: int, categories: list, **kwargs) -> int:
         panel_id = kwargs.get("panel_id")
         if panel_id:
-            # Check if panel with this ID exists in the database
             existing = self._run_query("SELECT id FROM panels WHERE id = ?", (panel_id,), fetch="one")
             if existing:
                 self._run_query("""
@@ -411,7 +281,6 @@ class DatabaseManager:
     def get_panel_by_id(self, panel_id: int) -> Optional[Dict[str, Any]]:
         row = self._run_query("SELECT * FROM panels WHERE id = ?", (panel_id,), fetch="one")
         if not row and panel_id == 16:
-            # Auto-create default panel 16 for Postgres/SQLite migration fallback
             default_categories = [
                 {
                     "id": "general",
@@ -462,7 +331,6 @@ class DatabaseManager:
         
         if ticket_id:
             sys.stderr.write(f"[TICKET_LIFECYCLE] [INSERT_SUCCESS] Ticket created successfully: ticket_id={ticket_id}, channel_id={channel_id}\n")
-            # Verify the record actually exists in the database immediately after insert
             verify_res = self.get_ticket_by_channel(channel_id)
             if verify_res:
                 sys.stderr.write(f"[TICKET_LIFECYCLE] [INSERT_VERIFIED] Verified newly created ticket in database: ticket_id={verify_res.get('id')}, channel_id={verify_res.get('channel_id')}\n")
@@ -478,7 +346,6 @@ class DatabaseManager:
         return self._run_query("SELECT * FROM tickets WHERE user_id = ? AND category_id = ? AND status = 'open'", (user_id, category_id), fetch="one")
 
     def get_ticket_by_id(self, ticket_id: int) -> Optional[Dict[str, Any]]:
-        # Ensure lookup works for both string and int IDs
         res = self._run_query("SELECT * FROM tickets WHERE id = ?", (ticket_id,), fetch="one")
         if not res:
             res = self._run_query("SELECT * FROM tickets WHERE id = ?", (str(ticket_id),), fetch="one")
@@ -489,7 +356,6 @@ class DatabaseManager:
             sys.stderr.write("[TICKET_LIFECYCLE] [QUERY_ERROR] get_ticket_by_channel called with empty channel_id\n")
             return None
         
-        # Convert to string and int versions
         s_id = str(channel_id)
         try:
             i_id = int(channel_id)
@@ -497,15 +363,13 @@ class DatabaseManager:
             sys.stderr.write(f"[TICKET_LIFECYCLE] [QUERY_ERROR] Failed to cast channel_id to int: {err}\n")
             i_id = 0
 
-        # Print the exact query and used channel_id as requested
         query = "SELECT * FROM tickets WHERE channel_id = ? OR channel_id = ? OR CAST(channel_id AS TEXT) = ?"
-        sys.stderr.write(f"[TICKET_LIFECYCLE] [QUERY_BY_CHANNEL] Executing query: '{query}' with parameters: i_id={i_id} ({type(i_id).__name__}), s_id='{s_id}' ({type(s_id).__name__})\n")
+        sys.stderr.write(f"[TICKET_LIFECYCLE] [QUERY_BY_CHANNEL] Executing query: '{query}' with parameters: i_id={i_id}, s_id='{s_id}'\n")
         
         res = self._run_query(query, (i_id, s_id, s_id), fetch="one")
         
         if not res and i_id == 0:
             query2 = "SELECT * FROM tickets WHERE CAST(channel_id AS TEXT) = ?"
-            sys.stderr.write(f"[TICKET_LIFECYCLE] [QUERY_BY_CHANNEL_FALLBACK] Executing fallback query: '{query2}' with parameter: '{s_id}'\n")
             res = self._run_query(query2, (s_id,), fetch="one")
             
         if res:
@@ -520,10 +384,7 @@ class DatabaseManager:
 
     def update_ticket_status(self, channel_id: int, status: str):
         closed_at = datetime.utcnow().isoformat() if status == 'closed' else None
-        if self.is_postgres:
-            self._run_query("UPDATE tickets SET status = ?, closed_at = COALESCE(%s, closed_at) WHERE channel_id = ?", (status, closed_at, channel_id))
-        else:
-            self._run_query("UPDATE tickets SET status = ?, closed_at = COALESCE(?, closed_at) WHERE channel_id = ?", (status, closed_at, channel_id))
+        self._run_query("UPDATE tickets SET status = ?, closed_at = COALESCE(?, closed_at) WHERE channel_id = ?", (status, closed_at, channel_id))
 
     def claim_ticket(self, channel_id: int, staff_id: Optional[int]):
         self._run_query("UPDATE tickets SET claimed_by = ? WHERE channel_id = ?", (staff_id, channel_id))
@@ -574,11 +435,6 @@ class DatabaseManager:
         try:
             self._run_query(f"UPDATE guild_settings SET {key} = ? WHERE guild_id = ?", (value, guild_id))
         except Exception as e:
-            if not self.is_postgres:
-                try:
-                    self._run_query(f"ALTER TABLE guild_settings ADD COLUMN {key} TEXT")
-                    self._run_query(f"UPDATE guild_settings SET {key} = ? WHERE guild_id = ?", (value, guild_id))
-                except: pass
             print(f"Error updating guild setting {key}: {e}")
 
     def get_action_permission(self, guild_id: int, action_name: str) -> Optional[Dict[str, Any]]:
@@ -617,15 +473,10 @@ class DatabaseManager:
         tot_stars = res["tot_stars"] if res else 0
         tot_ratings = res["tot_ratings"] if res else 0
         
-        # Update staff_stats
         self._run_query("INSERT OR IGNORE INTO staff_stats (guild_id, user_id) VALUES (?, ?)", (guild_id, staff_id))
-        if self.is_postgres:
-            self._run_query("UPDATE staff_stats SET total_stars = %s, total_ratings = %s WHERE guild_id = %s AND user_id = %s", (tot_stars, tot_ratings, guild_id, staff_id))
-        else:
-            self._run_query("UPDATE staff_stats SET total_stars = ?, total_ratings = ? WHERE guild_id = ? AND user_id = ?", (tot_stars, tot_ratings, guild_id, staff_id))
+        self._run_query("UPDATE staff_stats SET total_stars = ?, total_ratings = ? WHERE guild_id = ? AND user_id = ?", (tot_stars, tot_ratings, guild_id, staff_id))
 
     def delete_rating(self, rating_id: int):
-        # 1. Fetch rating to get staff_id and ticket_id
         rating = self._run_query("SELECT staff_id, ticket_id FROM ratings WHERE id = ?", (rating_id,), fetch="one")
         if not rating:
             return
@@ -633,19 +484,14 @@ class DatabaseManager:
         staff_id = rating["staff_id"]
         ticket_id = rating["ticket_id"]
         
-        # 2. Fetch guild_id from ticket
         ticket = self._run_query("SELECT guild_id FROM tickets WHERE id = ?", (ticket_id,), fetch="one")
         guild_id = ticket["guild_id"] if ticket else None
         
-        # 3. Delete the rating
         self._run_query("DELETE FROM ratings WHERE id = ?", (rating_id,))
-        
-        # 4. Recalculate stats
         if guild_id and staff_id:
             self.recalculate_staff_rating_stats(guild_id, staff_id)
 
     def delete_staff_ratings(self, staff_id: int):
-        # Get unique guild_ids for this staff's ratings before deleting
         guilds = self._run_query("""
         SELECT DISTINCT t.guild_id 
         FROM ratings r 
@@ -654,7 +500,6 @@ class DatabaseManager:
         """, (staff_id,), fetch="all") or []
         
         self._run_query("DELETE FROM ratings WHERE staff_id = ?", (staff_id,))
-        
         for g in guilds:
             self.recalculate_staff_rating_stats(g["guild_id"], staff_id)
 
@@ -728,7 +573,6 @@ class DatabaseManager:
     def get_staff_stats(self, guild_id: int, user_id: int) -> Optional[Dict[str, Any]]:
         row = self._run_query("SELECT * FROM staff_stats WHERE guild_id = ? AND user_id = ?", (guild_id, user_id), fetch="one")
         
-        # Dynamically calculate total_stars and total_ratings from ratings table to be 100% accurate
         rating_data = self._run_query("""
             SELECT COALESCE(SUM(r.stars), 0) as tot_stars, COUNT(r.id) as tot_ratings
             FROM ratings r
@@ -745,7 +589,6 @@ class DatabaseManager:
             res["total_ratings"] = tot_ratings
             return res
         else:
-            # If they don't have stats yet but they have ratings, return a default dictionary
             if tot_ratings > 0:
                 return {
                     "guild_id": guild_id,
@@ -762,24 +605,15 @@ class DatabaseManager:
 
     def update_staff_points(self, guild_id: int, user_id: int, points_delta: int):
         self._run_query("INSERT OR IGNORE INTO staff_stats (guild_id, user_id) VALUES (?, ?)", (guild_id, user_id))
-        if self.is_postgres:
-            self._run_query("UPDATE staff_stats SET points = points + %s WHERE guild_id = %s AND user_id = %s", (points_delta, guild_id, user_id))
-        else:
-            self._run_query("UPDATE staff_stats SET points = points + ? WHERE guild_id = ? AND user_id = ?", (points_delta, guild_id, user_id))
+        self._run_query("UPDATE staff_stats SET points = points + ? WHERE guild_id = ? AND user_id = ?", (points_delta, guild_id, user_id))
 
     def increment_staff_tickets(self, guild_id: int, user_id: int):
         self._run_query("INSERT OR IGNORE INTO staff_stats (guild_id, user_id) VALUES (?, ?)", (guild_id, user_id))
-        if self.is_postgres:
-            self._run_query("UPDATE staff_stats SET tickets_handled = tickets_handled + 1 WHERE guild_id = %s AND user_id = %s", (guild_id, user_id))
-        else:
-            self._run_query("UPDATE staff_stats SET tickets_handled = tickets_handled + 1 WHERE guild_id = ? AND user_id = ?", (guild_id, user_id))
+        self._run_query("UPDATE staff_stats SET tickets_handled = tickets_handled + 1 WHERE guild_id = ? AND user_id = ?", (guild_id, user_id))
 
     def add_staff_rating_stat(self, guild_id: int, user_id: int, stars: int):
         self._run_query("INSERT OR IGNORE INTO staff_stats (guild_id, user_id) VALUES (?, ?)", (guild_id, user_id))
-        if self.is_postgres:
-            self._run_query("UPDATE staff_stats SET total_stars = total_stars + %s, total_ratings = total_ratings + 1 WHERE guild_id = %s AND user_id = %s", (stars, guild_id, user_id))
-        else:
-            self._run_query("UPDATE staff_stats SET total_stars = total_stars + ?, total_ratings = total_ratings + 1 WHERE guild_id = ? AND user_id = ?", (stars, guild_id, user_id))
+        self._run_query("UPDATE staff_stats SET total_stars = total_stars + ?, total_ratings = total_ratings + 1 WHERE guild_id = ? AND user_id = ?", (stars, guild_id, user_id))
 
     def reset_staff_points(self, guild_id: int, user_id: Optional[int] = None):
         if user_id:
@@ -819,12 +653,20 @@ class DatabaseManager:
     def import_guild_config(self, guild_id: int, data: Dict[str, Any], executor_id: int):
         settings = data.get("settings", {})
         if settings:
-            # We can't easily do INSERT OR REPLACE with all columns in a generic way for Postgres here
-            # but we can try basic insert
             self._run_query("""
             INSERT INTO guild_settings 
             (guild_id, log_channel_id, transcript_channel_id, category_id, owner_role_id, admin_role_id, support_manager_role_id, senior_support_role_id, support_role_id, language)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT (guild_id) DO UPDATE SET
+                log_channel_id = EXCLUDED.log_channel_id,
+                transcript_channel_id = EXCLUDED.transcript_channel_id,
+                category_id = EXCLUDED.category_id,
+                owner_role_id = EXCLUDED.owner_role_id,
+                admin_role_id = EXCLUDED.admin_role_id,
+                support_manager_role_id = EXCLUDED.support_manager_role_id,
+                senior_support_role_id = EXCLUDED.senior_support_role_id,
+                support_role_id = EXCLUDED.support_role_id,
+                language = EXCLUDED.language
             """, (
                 guild_id,
                 settings.get("log_channel_id"),
@@ -842,7 +684,6 @@ class DatabaseManager:
         for p in panels:
             p_id = p.get("id")
             if p_id:
-                # First delete existing panel with that ID to avoid conflict
                 self._run_query("DELETE FROM panels WHERE id = ?", (p_id,))
                 self._run_query("""
                 INSERT INTO panels (id, title, description, color, image_url, banner_url, thumbnail_url, footer_text, channel_id, message_id, categories_json)
@@ -931,7 +772,6 @@ if __name__ == "__main__":
         db.unblacklist_user(args.get("user_id"))
         res = {"success": True}
     elif cmd == "get_guilds":
-        # Mock or real implementation for guilds
         res = []
     elif cmd == "sync_commands":
         res = {"success": True}

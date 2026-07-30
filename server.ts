@@ -346,7 +346,7 @@ app.get("/api/codebase/download-zip", async (req, res) => {
     function addDirToZip(dirPath: string, zipFolder: JSZip) {
       const items = fs.readdirSync(dirPath);
       for (const item of items) {
-        if (["node_modules", ".git", "dist", "__pycache__", "tickets.db"].includes(item)) continue;
+        if (["node_modules", ".git", "dist", "__pycache__"].includes(item)) continue;
         const fullPath = path.join(dirPath, item);
         const stat = fs.statSync(fullPath);
         if (stat.isDirectory()) {

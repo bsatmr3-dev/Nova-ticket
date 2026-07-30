@@ -25,7 +25,7 @@ class AdminCog(commands.Cog):
         db.unblacklist_user(user.id)
         await interaction.response.send_message(f"✅ User {user.mention} removed from blacklist.")
 
-    @app_commands.command(name="backup_db", description="Create manual SQLite backup / إنشاء نسخة احتياطية")
+    @app_commands.command(name="backup_db", description="Create PostgreSQL JSON backup / إنشاء نسخة احتياطية من قاعدة البيانات")
     async def backup_db(self, interaction: discord.Interaction):
         if not PermissionHandler.is_staff(interaction.user):
             return await interaction.response.send_message("❌ Admin privileges required.", ephemeral=True)

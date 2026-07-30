@@ -325,7 +325,7 @@ class MasterMenuDropdown(Select):
             discord.SelectOption(
                 label="💾 إنشاء نسخة احتياطية من القاعدة",
                 value="backup_db",
-                description="تحميل ملف SQLite الخاص بقاعدة البيانات فوراً",
+                description="تحميل نسخة احتياطية بصيغة JSON لقاعدة بيانات PostgreSQL فوراً",
                 emoji="💾"
             ),
             discord.SelectOption(
@@ -392,7 +392,7 @@ class MasterMenuDropdown(Select):
             try:
                 backup_path = BackupManager.create_backup()
                 with open(backup_path, "rb") as f:
-                    discord_file = discord.File(f, filename="tickets_backup.sqlite")
+                    discord_file = discord.File(f, filename="postgres_backup.json")
                     await interaction.response.send_message(
                         f"💾 **تم إنشاء وتصدير النسخة الاحتياطية بنجاح!**\n• تاريخ الإنشاء: <t:{int(time.time())}:F>",
                         file=discord_file,

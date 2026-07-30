@@ -25,7 +25,6 @@ class Config:
     BOT_TOKEN = get_bot_token()
     GUILD_ID = int(os.getenv("GUILD_ID", 0)) if os.getenv("GUILD_ID") and os.getenv("GUILD_ID").isdigit() else None
     DEFAULT_LANGUAGE = os.getenv("DEFAULT_LANGUAGE", "ar") # 'ar' or 'en'
-    DATABASE_PATH = os.getenv("DATABASE_PATH", "database/tickets.db")
     MAX_OPEN_TICKETS_PER_USER = int(os.getenv("MAX_OPEN_TICKETS_PER_USER", 1))
     COOLDOWN_SECONDS = int(os.getenv("COOLDOWN_SECONDS", 10))
     HTML_TRANSCRIPT_ENABLED = os.getenv("HTML_TRANSCRIPT_ENABLED", "true").lower() == "true"
