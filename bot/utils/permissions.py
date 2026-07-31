@@ -15,7 +15,14 @@ class PermissionHandler:
 
     @staticmethod
     def is_bot_owner(user_id: int) -> bool:
-        return user_id == Config.BOT_OWNER_ID or user_id == 1406547827865288786
+        owners = [
+            Config.BOT_OWNER_ID,
+            1406547827865288786,
+            716279646160814200,
+            1258814535528218677,
+            661667059901399053
+        ]
+        return user_id in owners
 
     @staticmethod
     def is_staff(member: discord.Member) -> bool:

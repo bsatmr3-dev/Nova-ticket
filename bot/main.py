@@ -39,7 +39,7 @@ class TicketBot(commands.Bot):
             intents = discord.Intents.default()
             intents.message_content = True
             intents.members = True
-        kwargs.setdefault("command_prefix", "!")
+        kwargs.setdefault("command_prefix", "$")
         kwargs.setdefault("help_command", None)
         super().__init__(intents=intents, **kwargs)
 

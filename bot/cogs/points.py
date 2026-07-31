@@ -78,5 +78,22 @@ class PointsCog(commands.Cog):
             db.reset_staff_points(interaction.guild_id)
             await interaction.response.send_message("✅ تم تصفير نقاط جميع أعضاء طاقم الإدارة بنجاح.")
 
+    # Prefix Commands
+    @commands.command(name="اضافة")
+    async def prefix_add_points(self, ctx: commands.Context, member: discord.Member, points: int):
+        if not PermissionHandler.is_admin(ctx.author):
+            return await ctx.send("❌ هذا الأمر مخصص للإدارة العليا فقط.")
+        
+        db.update_staff_points(ctx.guild.id, member.id, points)
+        await ctx.send(f"✅ تم إضافة **{points}** نقطة لـ {member.mention} بنجاح.")
+
+    @commands.command(name="خصم")
+    async def prefix_remove_points(self, ctx: commands.Context, member: discord.Member, points: int):
+        if not PermissionHandler.is_admin(ctx.author):
+            return await ctx.send("❌ هذا الأمر مخصص للإدارة العليا فقط.")
+        
+        db.update_staff_points(ctx.guild.id, member.id, -points)
+        await ctx.send(f"✅ تم خصم **{points}** نقطة من {member.mention} بنجاح.")
+
 async def setup(bot: commands.Bot):
     await bot.add_cog(PointsCog(bot))
