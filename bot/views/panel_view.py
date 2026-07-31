@@ -297,14 +297,14 @@ class TicketCategorySelect(Select):
 
             # Permission overwrites setup
             permission_overwrites = {
-                guild.default_role: discord.PermissionOverwrite(read_messages=False),
-                interaction.user: discord.PermissionOverwrite(read_messages=True, send_messages=True, attach_files=True, embed_links=True)
+                guild.default_role: discord.PermissionOverwrite(view_channel=False),
+                interaction.user: discord.PermissionOverwrite(view_channel=True, send_messages=True, attach_files=True, embed_links=True, read_message_history=True)
             }
 
             bot_member = guild.me or guild.get_member(interaction.client.user.id)
             if bot_member:
                 permission_overwrites[bot_member] = discord.PermissionOverwrite(
-                    read_messages=True, send_messages=True, manage_channels=True, manage_messages=True, attach_files=True, embed_links=True
+                    view_channel=True, send_messages=True, manage_channels=True, manage_messages=True, attach_files=True, embed_links=True, manage_permissions=True, read_message_history=True
                 )
 
             # Staff roles

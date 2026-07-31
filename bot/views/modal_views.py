@@ -185,7 +185,7 @@ class ChangeOwnerModal(Modal):
                 await interaction.channel.set_permissions(old_owner, overwrite=None)
 
         # Grant new owner permissions
-        await interaction.channel.set_permissions(new_owner, read_messages=True, send_messages=True, attach_files=True)
+        await interaction.channel.set_permissions(new_owner, view_channel=True, send_messages=True, attach_files=True, embed_links=True, read_message_history=True)
         db.update_ticket_owner(interaction.channel_id, new_owner.id)
 
         embed = EmbedBuilder.create_embed(
@@ -228,7 +228,7 @@ class AddMemberModal(Modal):
         if not target_member:
             return await interaction.response.send_message("❌ لم يتم العثور على العضو المحدد.", ephemeral=True)
 
-        await interaction.channel.set_permissions(target_member, read_messages=True, send_messages=True, attach_files=True)
+        await interaction.channel.set_permissions(target_member, view_channel=True, send_messages=True, attach_files=True, embed_links=True, read_message_history=True)
 
         embed = EmbedBuilder.create_embed(
             title="➕ تم إضافة عضو",

@@ -241,7 +241,7 @@ class PermissionHandler:
         overwrites = channel.overwrites.copy()
 
         # Default role (@everyone)
-        overwrites[guild.default_role] = discord.PermissionOverwrite(view_channel=False, read_messages=False)
+        overwrites[guild.default_role] = discord.PermissionOverwrite(view_channel=False)
 
         # Handle management / staff roles
         for role_id in staff_role_ids:
@@ -249,10 +249,10 @@ class PermissionHandler:
             if role:
                 if is_hidden:
                     # Hide: Management roles cannot view the channel
-                    overwrites[role] = discord.PermissionOverwrite(view_channel=False, read_messages=False)
+                    overwrites[role] = discord.PermissionOverwrite(view_channel=False)
                 else:
                     # Show: Restore visibility to management roles, BUT read-only (without send_messages)
-                    overwrites[role] = discord.PermissionOverwrite(view_channel=True, read_messages=True, send_messages=False)
+                    overwrites[role] = discord.PermissionOverwrite(view_channel=True, send_messages=False, read_message_history=True)
 
         # Ticket owner (صاحب التذكرة)
         owner = guild.get_member(ticket_user_id) if ticket_user_id else None
@@ -263,7 +263,7 @@ class PermissionHandler:
                 owner = None
         if owner:
             can_send = True if ticket.get("status") in ["open", "claimed"] else False
-            overwrites[owner] = discord.PermissionOverwrite(view_channel=True, read_messages=True, send_messages=can_send, attach_files=can_send, embed_links=can_send)
+            overwrites[owner] = discord.PermissionOverwrite(view_channel=True, send_messages=can_send, attach_files=can_send, embed_links=can_send, read_message_history=True)
 
         # Claimed staff member (مستلم التذكرة)
         if claimed_by:
@@ -275,14 +275,14 @@ class PermissionHandler:
                     claimed_member = None
             if claimed_member:
                 overwrites[claimed_member] = discord.PermissionOverwrite(
-                    view_channel=True, read_messages=True, send_messages=True, attach_files=True, embed_links=True, manage_messages=True
+                    view_channel=True, send_messages=True, attach_files=True, embed_links=True, manage_messages=True, read_message_history=True
                 )
 
         # Bot
         bot_member = guild.me
         if bot_member:
             overwrites[bot_member] = discord.PermissionOverwrite(
-                view_channel=True, read_messages=True, send_messages=True, manage_channels=True, manage_messages=True, attach_files=True, embed_links=True
+                view_channel=True, send_messages=True, manage_channels=True, manage_messages=True, attach_files=True, embed_links=True, manage_permissions=True, read_message_history=True
             )
 
         await channel.edit(overwrites=overwrites)

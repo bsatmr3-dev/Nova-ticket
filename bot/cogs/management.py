@@ -390,7 +390,7 @@ class TicketManagementCog(commands.Cog):
         if not await self.check_ticket_state(interaction, ticket, "add_member"):
             return
 
-        await interaction.channel.set_permissions(member, read_messages=True, send_messages=True)
+        await interaction.channel.set_permissions(member, view_channel=True, send_messages=True, attach_files=True, embed_links=True, read_message_history=True)
         await interaction.response.send_message(f"✅ Added {member.mention} to this ticket.")
 
     @app_commands.command(name="remove_member", description="Remove user from ticket / إزالة عضو")
@@ -401,7 +401,7 @@ class TicketManagementCog(commands.Cog):
         if not await self.check_ticket_state(interaction, ticket, "remove_member"):
             return
 
-        await interaction.channel.set_permissions(member, read_messages=False)
+        await interaction.channel.set_permissions(member, view_channel=False)
         await interaction.response.send_message(f"❌ Removed {member.mention} from this ticket.")
 
     @app_commands.command(name="priority", description="Set ticket priority / تغيير أولوية التذكرة")

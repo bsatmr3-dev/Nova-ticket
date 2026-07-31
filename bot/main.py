@@ -178,22 +178,42 @@ class TicketBot(commands.Bot):
             
             # 1. Staff Writing Restrictions
             if is_staff and not is_owner:
-                # If not claimed, staff shouldn't write (except bot owner)
-                if not claimed_by and not PermissionHandler.is_bot_owner(message.author.id):
-                    try:
-                        await message.delete()
-                        return await message.channel.send(f"⚠️ {message.author.mention}، لا يمكنك الكتابة في التذكرة قبل استلامها.", delete_after=5)
-                    except: pass
+                # Bypass check for bot owner, guild owner, or administrators
+                is_admin_bypass = (
+                    PermissionHandler.is_bot_owner(message.author.id) or 
+                    message.author.id == message.guild.owner_id or 
+                    message.author.guild_permissions.administrator
+                )
                 
-                # If claimed by someone else
-                if claimed_by and message.author.id != claimed_by and not PermissionHandler.is_bot_owner(message.author.id):
-                    # Check if they are admin/manager (bypass check)
-                    rank = PermissionHandler.get_member_rank(message.author)
-                    if rank < PermissionHandler.ROLE_HIERARCHY["admin"]:
-                        try:
-                            await message.delete()
-                            return await message.channel.send(f"⚠️ {message.author.mention}، التذكرة مستلمة من قبل <@{claimed_by}>، هو الوحيد المخول بالكتابة حالياً.", delete_after=5)
-                        except: pass
+                if not is_admin_bypass:
+                    # Check if they are the claimant
+                    is_claimant = (claimed_by and message.author.id == claimed_by)
+                    
+                    # Check if they were explicitly added via add_member (has user-specific overwrite allowing send_messages)
+                    is_added_member = False
+                    overwrites = message.channel.overwrites
+                    if message.author in overwrites:
+                        ov = overwrites[message.author]
+                        if ov.send_messages is True:
+                            is_added_member = True
+
+                    if not is_claimant and not is_added_member:
+                        # If not claimed at all
+                        if not claimed_by:
+                            try:
+                                await message.delete()
+                                return await message.channel.send(f"⚠️ {message.author.mention}، لا يمكنك الكتابة في التذكرة قبل استلامها.", delete_after=5)
+                            except: pass
+                        
+                        # If claimed by someone else
+                        else:
+                            # Check rank for secondary bypass (Support Manager+)
+                            rank = PermissionHandler.get_member_rank(message.author)
+                            if rank < PermissionHandler.ROLE_HIERARCHY["support_manager"]:
+                                try:
+                                    await message.delete()
+                                    return await message.channel.send(f"⚠️ {message.author.mention}، التذكرة مستلمة من قبل <@{claimed_by}>، هو الوحيد المخول بالكتابة حالياً.", delete_after=5)
+                                except: pass
 
                 # Tracking last staff message
                 db.update_staff_reply(message.channel.id, datetime.utcnow().isoformat())
