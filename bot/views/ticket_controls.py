@@ -114,359 +114,279 @@ class TicketActionBase(Select):
             elif action == "add_note": await interaction.response.send_modal(InternalNoteModal(ticket, self.lang))
             return
 
+        if action in ["close", "delete"]:
+            # Bypass for bot owners
+            if not PermissionHandler.is_bot_owner(member.id):
+                # Check if closure info already exists
+                closure_info = db.get_closure_info(ticket.get("id", 0))
+                if not closure_info:
+                    from bot.views.closure_workflow import ClosureWorkflowView
+                    workflow_view = ClosureWorkflowView(ticket.get("id"), action, self.lang)
+                    
+                    # Define what happens after workflow is complete
+                    async def final_callback():
+                        if action == "close":
+                            await self._execute_close(interaction, guild, member, ticket, ticket_user_id)
+                        elif action == "delete":
+                            await self._execute_delete(interaction, guild, member, ticket, ticket_user_id)
+                    
+                    workflow_view.final_callback = final_callback
+                    
+                    embed = EmbedBuilder.create_embed(
+                        title="⚠️ متطلبات إغلاق التذكرة",
+                        description=(
+                            "قبل إغلاق أو حذف هذه التذكرة، يرجى استكمال البيانات التالية:\n\n"
+                            "1️⃣ **صاحب التذكرة:** هل تم حل مشكلتك؟\n"
+                            "2️⃣ **الموظف المستلم:** تحديد نوع العقوبة وإرفاق الأدلة.\n\n"
+                            "⏳ يرجى من صاحب التذكرة البدء بالإجابة أولاً."
+                        ),
+                        color=EmbedBuilder.COLOR_WARNING
+                    )
+                    
+                    # We need to send this as a new message or edit?
+                    # If we defered, we must use followup.
+                    # In process_action, we defer for close/delete if not bot owner? 
+                    # Wait, let's check when defer happens.
+                    
+                    # In the current code, defer happens AFTER the modals check.
+                    # We should handle this before defer.
+                    if not interaction.response.is_done():
+                        return await interaction.response.send_message(embed=embed, view=workflow_view)
+                    else:
+                        return await interaction.followup.send(embed=embed, view=workflow_view)
+
         # For other actions, defer immediately to prevent "Application did not respond"
         await interaction.response.defer(ephemeral=True if action in ["info", "audit_log", "toggle_hide"] else False)
 
         if action == "claim":
-            if ticket.get("claimed_by"):
-                return await interaction.followup.send("❌ هذه التذكرة مستلمة بالفعل!", ephemeral=True)
-            if member.id == ticket_user_id:
-                return await interaction.followup.send("❌ لا يمكنك استلام تذكرتك الخاصة!", ephemeral=True)
-
-            db.claim_ticket(interaction.channel_id, member.id)
-            db.increment_staff_tickets(guild.id, member.id)
-            
-            # Award category points on claim
-            category_points = ticket.get("category_points", 0)
-            if category_points > 0:
-                db.update_staff_points(guild.id, member.id, category_points)
-            
-            settings = db.get_guild_settings(guild.id) or {}
-            staff_roles = [settings.get("support_role_id"), settings.get("senior_support_role_id"), settings.get("admin_role_id"), settings.get("support_manager_role_id"), settings.get("owner_role_id")]
-            overwrites = interaction.channel.overwrites
-            
-            for role_id in staff_roles:
-                if role_id:
-                    role = guild.get_role(int(role_id))
-                    if role: overwrites[role] = discord.PermissionOverwrite(view_channel=True, send_messages=False)
-            
-            overwrites[member] = discord.PermissionOverwrite(view_channel=True, send_messages=True, attach_files=True, embed_links=True, manage_messages=True)
-            
-            owner = guild.get_member(ticket_user_id)
-            if owner: overwrites[owner] = discord.PermissionOverwrite(view_channel=True, send_messages=True, attach_files=True, embed_links=True)
-            
-            await interaction.channel.edit(overwrites=overwrites)
-            await interaction.followup.send(embed=EmbedBuilder.create_embed(title="📌 تم استلام التذكرة", description=f"تم استلام التذكرة بواسطة {member.mention}.", color=EmbedBuilder.COLOR_SUCCESS))
-            await TicketLogger.log_action(guild, ticket, "استلام التذكرة", member)
-
+            await self._execute_claim(interaction, guild, member, ticket, ticket_user_id)
         elif action == "unclaim":
-            claimed_id = ticket.get("claimed_by")
-            if not claimed_id: return await interaction.followup.send("⚠️ التذكرة غير مستلمة حالياً!", ephemeral=True)
-            
-            db.claim_ticket(interaction.channel_id, None)
-            settings = db.get_guild_settings(guild.id) or {}
-            staff_roles = [settings.get("support_role_id"), settings.get("senior_support_role_id"), settings.get("admin_role_id"), settings.get("support_manager_role_id"), settings.get("owner_role_id")]
-            overwrites = interaction.channel.overwrites
-            
-            for role_id in staff_roles:
-                if role_id:
-                    role = guild.get_role(int(role_id))
-                    if role: overwrites[role] = discord.PermissionOverwrite(view_channel=True, send_messages=False)
-            
-            claimant = guild.get_member(claimed_id)
-            if claimant and claimant in overwrites: del overwrites[claimant]
-            
-            await interaction.channel.edit(overwrites=overwrites)
-            await interaction.followup.send(embed=EmbedBuilder.create_embed(title="🔓 تم إلغاء الاستلام", description="عادت التذكرة متاحة للاستلام.", color=EmbedBuilder.COLOR_WARNING))
-            await TicketLogger.log_action(guild, ticket, "إلغاء الاستلام", member)
-
+            await self._execute_unclaim(interaction, guild, member, ticket)
         elif action == "close":
-            db.update_ticket_status(interaction.channel_id, "closed")
-            owner = guild.get_member(ticket_user_id) if ticket_user_id else None
-            if not owner and ticket_user_id:
-                try:
-                    owner = await guild.fetch_member(ticket_user_id)
-                except Exception:
-                    try:
-                        owner = await interaction.client.fetch_user(ticket_user_id)
-                    except Exception:
-                        owner = None
-
-            if owner and isinstance(owner, discord.Member):
-                await interaction.channel.set_permissions(owner, view_channel=True, send_messages=False)
-
-            await interaction.followup.send(embed=EmbedBuilder.create_embed(title="🔒 تم إغلاق التذكرة", description=f"أغلقت التذكرة بواسطة {member.mention}.", color=EmbedBuilder.COLOR_DANGER))
-            await TicketLogger.log_action(guild, ticket, "إغلاق التذكرة", member)
-
-            try:
-                from bot.utils.transcript_generator import TranscriptGenerator
-                await TranscriptGenerator.send_transcript(interaction.channel, ticket, guild)
-            except Exception as e:
-                print(f"Error sending transcript on close: {e}")
-
-            # Send rating view to ticket owner if claimed
-            staff_id = ticket.get("claimed_by")
-            if owner and ticket_user_id and staff_id:
-                from bot.views.rating_view import RatingView
-                try:
-                    staff_member = guild.get_member(staff_id)
-                    if not staff_member:
-                        try:
-                            staff_member = await guild.fetch_member(staff_id)
-                        except Exception:
-                            staff_member = None
-                    staff_mention = staff_member.mention if staff_member else f"<@{staff_id}>"
-
-                    rating_embed = EmbedBuilder.create_embed(
-                        title="⭐ تقييم خدمة الدعم الفني",
-                        description=(
-                            f"مرحباً <@{ticket_user_id}> 👋،\n"
-                            f"تم إغلاق تذكرتك بنجاح في سيرفر **{guild.name}**.\n\n"
-                            f"👤 **مستلم التذكرة / المسؤول:** {staff_mention}\n\n"
-                            f"يرجى تقييم أداء الموظف وجودة الخدمة التي تلقيتها بالضغط على الأزرار أدناه (1 إلى 5 نجوم):"
-                        ),
-                        color=EmbedBuilder.COLOR_PRIMARY
-                    )
-                    await owner.send(embed=rating_embed, view=RatingView(ticket['id'], staff_id, self.lang))
-                except Exception as e:
-                    print(f"Error sending rating DM to owner: {e}")
-
+            await self._execute_close(interaction, guild, member, ticket, ticket_user_id)
         elif action == "summon_staff":
-            settings = db.get_guild_settings(guild.id) or {}
-            staff_role_id = settings.get("support_role_id")
-            role_mention = f"<@&{staff_role_id}>" if staff_role_id else "@everyone"
-            await interaction.channel.send(f"🔔 {role_mention}، العضو {member.mention} بحاجة للمساعدة!")
-            await interaction.followup.send("✅ تم إرسال نداء لطاقم الدعم.", ephemeral=True)
-
-            # Private DM notification to the claimed staff member
-            claimed_id = ticket.get("claimed_by")
-            if claimed_id:
-                try:
-                    claimed_member = guild.get_member(claimed_id) or await guild.fetch_member(claimed_id)
-                    if claimed_member:
-                        lang = settings.get("language", "ar")
-                        title_dm = "🔔 نداء دعم في تذكرة مستلمة" if lang == "ar" else "🔔 Support Summon in Claimed Ticket"
-                        desc_dm = (
-                            f"لقد تم استدعاؤك في التذكرة {interaction.channel.mention} من قبل العضو {member.mention}.\nيرجى التوجه إلى القناة لتقديم المساعدة."
-                            if lang == "ar" else
-                            f"You have been summoned in ticket {interaction.channel.mention} by member {member.mention}.\nPlease head over to the channel to assist."
-                        )
-                        embed_dm = EmbedBuilder.create_embed(title=title_dm, description=desc_dm, color=EmbedBuilder.COLOR_WARNING)
-                        await claimed_member.send(embed=embed_dm)
-                except Exception as e:
-                    print(f"Error sending DM alert to claimed staff: {e}")
-
+            await self._execute_summon_staff(interaction, guild, member, ticket)
         elif action == "summon_member":
-            owner_id = ticket.get("user_id")
-            if not owner_id:
-                return await interaction.followup.send("❌ لم يتم العثور على صاحب التذكرة.", ephemeral=True)
-            owner = guild.get_member(owner_id)
-            if not owner:
-                try:
-                    owner = await guild.fetch_member(owner_id)
-                except:
-                    owner = None
-            if owner:
-                embed = EmbedBuilder.create_embed(
-                    title="🔔 نداء حضور / Attention Required",
-                    description=f"مرحباً {owner.mention}،\nيرجى التواجد في التذكرة {interaction.channel.mention} للرد على استفسار الدعم الفني.",
-                    color=EmbedBuilder.COLOR_WARNING
-                )
-                await interaction.channel.send(content=owner.mention, embed=embed)
-            else:
-                await interaction.channel.send(f"🔔 نداء حضور: صاحب التذكرة <@{owner_id}> يرجى التواجد ومتابعة الدعم الفني.")
-            await interaction.followup.send("✅ تم إرسال نداء لصاحب التذكرة.", ephemeral=True)
-
-
+            await self._execute_summon_member(interaction, guild, member, ticket)
         elif action == "toggle_hide":
-            is_hidden = ticket.get("is_hidden", 0)
-            new_hidden = 0 if is_hidden else 1
-            await PermissionHandler.set_ticket_visibility(interaction.channel, guild, ticket, is_hidden=bool(new_hidden))
-            status_text = "مخفية (فقط المستلم وصاحب التذكرة)" if new_hidden else "مرئية لكافة الطاقم (مشاهدة فقط بدون كتابة)"
-            await interaction.followup.send(f"✅ تم تغيير حالة التذكرة إلى: **{status_text}**", ephemeral=True)
-
-        elif action in ["lock", "unlock"]:
-            owner = guild.get_member(ticket_user_id) if ticket_user_id else None
-            if not owner and ticket_user_id:
-                try:
-                    owner = await guild.fetch_member(ticket_user_id)
-                except Exception:
-                    owner = None
-
-            if action == "lock":
-                if owner and isinstance(owner, discord.Member):
-                    await interaction.channel.set_permissions(owner, view_channel=False)
-                db.update_ticket_status(interaction.channel_id, "locked")
-                await interaction.followup.send(embed=EmbedBuilder.create_embed(title="🔐 تم قفل التذكرة", description="تم قفل التذكرة وإخفاؤها عن العضو.", color=EmbedBuilder.COLOR_DANGER))
-            else:
-                if owner and isinstance(owner, discord.Member):
-                    await interaction.channel.set_permissions(owner, view_channel=True, send_messages=True)
-                new_st = "claimed" if ticket.get("claimed_by") else "open"
-                db.update_ticket_status(interaction.channel_id, new_st)
-                await interaction.followup.send(embed=EmbedBuilder.create_embed(title="🔓 تم فتح التذكرة", description="تمت إعادة صلاحية الرؤية والكتابة للعضو.", color=EmbedBuilder.COLOR_SUCCESS))
-
+            await self._execute_toggle_hide(interaction, guild, member, ticket)
+        elif action == "lock":
+            await self._execute_lock(interaction, guild, member, ticket, ticket_user_id)
+        elif action == "unlock":
+            await self._execute_unlock(interaction, guild, member, ticket, ticket_user_id)
         elif action in ["hold", "resume", "hold_resume", "toggle_hold"]:
-            current_status = ticket.get("status", "open")
-            owner = guild.get_member(ticket_user_id) if ticket_user_id else None
-            if not owner and ticket_user_id:
-                try:
-                    owner = await guild.fetch_member(ticket_user_id)
-                except Exception:
-                    owner = None
-
-            if current_status == "on_hold" or action == "resume":
-                if owner and isinstance(owner, discord.Member):
-                    await interaction.channel.set_permissions(owner, view_channel=True, send_messages=True)
-                new_st = "claimed" if ticket.get("claimed_by") else "open"
-                db.update_ticket_status(interaction.channel_id, new_st)
-                await interaction.followup.send(embed=EmbedBuilder.create_embed(title="▶️ تم استئناف التذكرة", description="تمت إعادة صلاحية الكتابة للعضو بنجاح.", color=EmbedBuilder.COLOR_SUCCESS))
-                await TicketLogger.log_action(guild, ticket, "استئناف التذكرة", member)
-            else:
-                if owner and isinstance(owner, discord.Member):
-                    await interaction.channel.set_permissions(owner, view_channel=True, send_messages=False)
-                db.update_ticket_status(interaction.channel_id, "on_hold")
-                await interaction.followup.send(embed=EmbedBuilder.create_embed(title="⏸️ تم تعليق التذكرة", description="العضو الآن قادر على الرؤية فقط ولا يمكنه الكتابة.", color=EmbedBuilder.COLOR_WARNING))
-                await TicketLogger.log_action(guild, ticket, "تعليق التذكرة", member)
-
+            await self._execute_hold_resume(interaction, guild, member, ticket, ticket_user_id, action)
         elif action == "restart":
-            is_hidden = ticket.get("is_hidden", 0)
-            await PermissionHandler.set_ticket_visibility(interaction.channel, guild, ticket, is_hidden=bool(is_hidden))
-            await interaction.followup.send(
-                embed=EmbedBuilder.create_embed(
-                    title="🔄 تم إعادة تشغيل القائمة والتذكرة",
-                    description="تم تحديث حالة القائمة وضبط صلاحيات القناة بنجاح! 🔄",
-                    color=EmbedBuilder.COLOR_PRIMARY
-                ),
-                ephemeral=True
-            )
-
+            await self._execute_restart(interaction, guild, member, ticket)
         elif action == "info":
-            owner_id = ticket.get("user_id")
-            claimed_id = ticket.get("claimed_by")
-            
-            owner_mention = f"<@{owner_id}>" if owner_id else "غير معروف"
-            claimed_mention = f"<@{claimed_id}>" if claimed_id else "❌ لم تستلم بعد"
-            
-            embed = EmbedBuilder.create_embed(title=f"📊 حالة التذكرة #{ticket.get('id')}", color=EmbedBuilder.COLOR_INFO)
-            embed.add_field(name="👤 صاحب التذكرة", value=owner_mention, inline=True)
-            embed.add_field(name="📌 المستلم الحالي", value=claimed_mention, inline=True)
-            embed.add_field(name="🔒 الحالة", value=f"**{ticket.get('status', 'open').upper()}**", inline=True)
-            embed.add_field(name="👁️ الرؤية", value="🙈 مخفية" if ticket.get("is_hidden") else "👁️ عامة للطاقم", inline=True)
-            created_at = ticket.get("created_at")
-            try:
-                if isinstance(created_at, str) and "T" in created_at:
-                    from datetime import datetime
-                    ts = int(datetime.fromisoformat(created_at).timestamp())
-                else:
-                    ts = int(float(created_at or 0))
-            except: ts = 0
-            
-            embed.add_field(name="📅 تاريخ الفتح", value=f"<t:{ts}:F>" if ts else "غير معروف", inline=False)
-            
-            await interaction.followup.send(embed=embed, ephemeral=True)
-
+            await self._execute_info(interaction, ticket)
         elif action == "audit_log":
-            audits = db.get_audit_logs(ticket.get("id"))
-            log_text = "\n".join([f"• {a['action']} بواسطة <@{a['executor_id']}>" for a in audits[-10:]])
-            await interaction.followup.send(f"📜 **سجل العمليات الأخير:**\n{log_text or 'لا توجد عمليات مسجلة.'}", ephemeral=True)
-
+            await self._execute_audit_log(interaction, ticket)
         elif action == "toggle_evidence":
-            new_state = db.toggle_ticket_evidence(interaction.channel_id)
-            status_str = "مفعّلة ✅" if new_state else "معطّلة ❌"
-            embed = EmbedBuilder.create_embed(
-                title="⚙️ حالة ميزة الأدلة والصور",
-                description=f"تم تعديل ميزة استقبال وتسجيل الأدلة لهذه التذكرة لتصبح: **{status_str}**",
-                color=EmbedBuilder.COLOR_SUCCESS if new_state else EmbedBuilder.COLOR_WARNING
-            )
-            await interaction.followup.send(embed=embed)
-            await TicketLogger.log_action(guild, ticket, "تغيير حالة الأدلة", member, details=f"أصبحت: {status_str}")
-
+            await self._execute_toggle_evidence(interaction, guild, member, ticket)
         elif action == "view_evidence":
-            evidence_list = db.get_ticket_evidence(ticket.get("id", 0))
-            if not evidence_list:
-                embed = EmbedBuilder.create_embed(
-                    title="📸 قائمة أدلة ومرفقات التذكرة",
-                    description="📷 لم يتم تسجيل أو إرفاق أي أدلة لهذه التذكرة حتى الآن.",
-                    color=EmbedBuilder.COLOR_INFO
-                )
-                return await interaction.followup.send(embed=embed, ephemeral=True)
-
-            embed = EmbedBuilder.create_embed(
-                title=f"📸 قائمة الأدلة والمرفقات للتذكرة #{ticket.get('id')}",
-                description=f"إجمالي الأدلة المسجلة: **{len(evidence_list)}** دليلاً\n\n",
-                color=EmbedBuilder.COLOR_PRIMARY
-            )
-            
-            for idx, item in enumerate(evidence_list, 1):
-                u_id = item.get("user_id")
-                url = item.get("evidence_url")
-                note = item.get("note")
-                dt_str = item.get("created_at", "")
-                
-                try:
-                    if isinstance(dt_str, str) and "T" in dt_str:
-                        from datetime import datetime
-                        ts = int(datetime.fromisoformat(dt_str).timestamp())
-                        time_fmt = f"<t:{ts}:R>"
-                    else:
-                        time_fmt = dt_str
-                except:
-                    time_fmt = dt_str
-
-                val = f"👤 بواسطة: <@{u_id}> ({time_fmt})\n🔗 [رابط الدليل / الصورة]({url})"
-                if note:
-                    val += f"\n📝 ملاحظة: {note}"
-                
-                embed.add_field(name=f"دليل #{idx}", value=val, inline=False)
-
-            latest_url = evidence_list[-1].get("evidence_url")
-            if latest_url and (latest_url.startswith("http://") or latest_url.startswith("https://")):
-                embed.set_image(url=latest_url)
-
-            await interaction.followup.send(embed=embed)
-
+            await self._execute_view_evidence(interaction, ticket)
         elif action == "generate_transcript":
-            from bot.utils.transcript_generator import TranscriptGenerator
-            await TranscriptGenerator.send_transcript(interaction.channel, ticket, guild, interaction)
-            await TicketLogger.log_action(guild, ticket, "تصدير Transcript", member)
-        
+            await self._execute_generate_transcript(interaction, guild, member, ticket)
         elif action == "delete":
-            await interaction.followup.send("🗑️ جاري حذف التذكرة وإرسال طلب التقييم لصاحب التذكرة خلال 3 ثوانٍ...")
+            await self._execute_delete(interaction, guild, member, ticket, ticket_user_id)
+
+    async def _execute_claim(self, interaction, guild, member, ticket, ticket_user_id):
+        if ticket.get("claimed_by"):
+            return await interaction.followup.send("❌ هذه التذكرة مستلمة بالفعل!", ephemeral=True)
+        if member.id == ticket_user_id:
+            return await interaction.followup.send("❌ لا يمكنك استلام تذكرتك الخاصة!", ephemeral=True)
+
+        db.claim_ticket(interaction.channel_id, member.id)
+        db.increment_staff_tickets(guild.id, member.id)
+        
+        category_points = ticket.get("category_points", 0)
+        if category_points > 0:
+            db.update_staff_points(guild.id, member.id, category_points)
+        
+        settings = db.get_guild_settings(guild.id) or {}
+        staff_roles = [settings.get("support_role_id"), settings.get("senior_support_role_id"), settings.get("admin_role_id"), settings.get("support_manager_role_id"), settings.get("owner_role_id")]
+        overwrites = interaction.channel.overwrites
+        
+        for role_id in staff_roles:
+            if role_id:
+                role = guild.get_role(int(role_id))
+                if role: overwrites[role] = discord.PermissionOverwrite(view_channel=True, send_messages=False)
+        
+        overwrites[member] = discord.PermissionOverwrite(view_channel=True, send_messages=True, attach_files=True, embed_links=True, manage_messages=True)
+        
+        owner = guild.get_member(ticket_user_id)
+        if owner: overwrites[owner] = discord.PermissionOverwrite(view_channel=True, send_messages=True, attach_files=True, embed_links=True)
+        
+        await interaction.channel.edit(overwrites=overwrites)
+        await interaction.followup.send(embed=EmbedBuilder.create_embed(title="📌 تم استلام التذكرة", description=f"تم استلام التذكرة بواسطة {member.mention}.", color=EmbedBuilder.COLOR_SUCCESS))
+        await TicketLogger.log_action(guild, ticket, "استلام التذكرة", member)
+
+    async def _execute_unclaim(self, interaction, guild, member, ticket):
+        claimed_id = ticket.get("claimed_by")
+        if not claimed_id: return await interaction.followup.send("⚠️ التذكرة غير مستلمة حالياً!", ephemeral=True)
+        
+        db.claim_ticket(interaction.channel_id, None)
+        settings = db.get_guild_settings(guild.id) or {}
+        staff_roles = [settings.get("support_role_id"), settings.get("senior_support_role_id"), settings.get("admin_role_id"), settings.get("support_manager_role_id"), settings.get("owner_role_id")]
+        overwrites = interaction.channel.overwrites
+        
+        for role_id in staff_roles:
+            if role_id:
+                role = guild.get_role(int(role_id))
+                if role: overwrites[role] = discord.PermissionOverwrite(view_channel=True, send_messages=False)
+        
+        claimant = guild.get_member(claimed_id)
+        if claimant and claimant in overwrites: del overwrites[claimant]
+        
+        await interaction.channel.edit(overwrites=overwrites)
+        await interaction.followup.send(embed=EmbedBuilder.create_embed(title="🔓 تم إلغاء الاستلام", description="عادت التذكرة متاحة للاستلام.", color=EmbedBuilder.COLOR_WARNING))
+        await TicketLogger.log_action(guild, ticket, "إلغاء الاستلام", member)
+
+    async def _execute_close(self, interaction, guild, member, ticket, ticket_user_id):
+        db.update_ticket_status(interaction.channel_id, "closed")
+        owner = guild.get_member(ticket_user_id) if ticket_user_id else None
+        if not owner and ticket_user_id:
+            try: owner = await guild.fetch_member(ticket_user_id)
+            except Exception:
+                try: owner = await interaction.client.fetch_user(ticket_user_id)
+                except Exception: owner = None
+
+        if owner and isinstance(owner, discord.Member):
+            await interaction.channel.set_permissions(owner, view_channel=True, send_messages=False)
+
+        emb = EmbedBuilder.create_embed(title="🔒 تم إغلاق التذكرة", description=f"أغلقت التذكرة بواسطة {member.mention}.", color=EmbedBuilder.COLOR_DANGER)
+        if interaction.response.is_done():
+            await interaction.followup.send(embed=emb)
+        else:
+            await interaction.response.send_message(embed=emb)
+            
+        await TicketLogger.log_action(guild, ticket, "إغلاق التذكرة", member)
+
+        try:
+            from bot.utils.transcript_generator import TranscriptGenerator
+            await TranscriptGenerator.send_transcript(interaction.channel, ticket, guild)
+        except Exception as e:
+            print(f"Error sending transcript on close: {e}")
+
+        staff_id = ticket.get("claimed_by")
+        if owner and ticket_user_id and staff_id:
+            from bot.views.rating_view import RatingView
             try:
-                from bot.utils.transcript_generator import TranscriptGenerator
-                await TranscriptGenerator.send_transcript(interaction.channel, ticket, guild)
+                rating_embed = EmbedBuilder.create_embed(
+                    title="⭐ تقييم خدمة الدعم الفني",
+                    description=f"مرحباً <@{ticket_user_id}> 👋، تم إغلاق تذكرتك بنجاح.\nيرجى تقييم الخدمة بالضغط على الأزرار أدناه:",
+                    color=EmbedBuilder.COLOR_PRIMARY
+                )
+                await owner.send(embed=rating_embed, view=RatingView(ticket['id'], staff_id, self.lang))
             except Exception as e:
-                print(f"Error sending transcript on delete: {e}")
-            owner = guild.get_member(ticket_user_id) if ticket_user_id else None
-            if not owner and ticket_user_id:
-                try:
-                    owner = await guild.fetch_member(ticket_user_id)
-                except Exception:
-                    try:
-                        owner = await interaction.client.fetch_user(ticket_user_id)
-                    except Exception:
-                        owner = None
+                print(f"Error sending rating DM: {e}")
 
-            staff_id = ticket.get("claimed_by")
-            if owner and ticket_user_id and staff_id:
-                from bot.views.rating_view import RatingView
-                try:
-                    staff_member = guild.get_member(staff_id)
-                    if not staff_member:
-                        try:
-                            staff_member = await guild.fetch_member(staff_id)
-                        except Exception:
-                            staff_member = None
-                    staff_mention = staff_member.mention if staff_member else f"<@{staff_id}>"
+    async def _execute_delete(self, interaction, guild, member, ticket, ticket_user_id):
+        if interaction.response.is_done():
+            await interaction.followup.send("🗑️ جاري حذف التذكرة خلال 3 ثوانٍ...")
+        else:
+            await interaction.response.send_message("🗑️ جاري حذف التذكرة خلال 3 ثوانٍ...")
 
-                    rating_embed = EmbedBuilder.create_embed(
-                        title="⭐ تقييم خدمة الدعم الفني",
-                        description=(
-                            f"مرحباً <@{ticket_user_id}> 👋،\n"
-                            f"تم حذف تذكرتك في سيرفر **{guild.name}**.\n\n"
-                            f"👤 **مستلم التذكرة / المسؤول:** {staff_mention}\n\n"
-                            f"يرجى تقييم أداء الموظف وجودة الخدمة التي تلقيتها بالضغط على الأزرار أدناه (1 إلى 5 نجوم):"
-                        ),
-                        color=EmbedBuilder.COLOR_PRIMARY
-                    )
-                    await owner.send(embed=rating_embed, view=RatingView(ticket['id'], staff_id, self.lang))
-                except Exception as e:
-                    print(f"Error sending rating DM on delete: {e}")
+        try:
+            from bot.utils.transcript_generator import TranscriptGenerator
+            await TranscriptGenerator.send_transcript(interaction.channel, ticket, guild)
+        except Exception as e:
+            print(f"Error sending transcript on delete: {e}")
 
-            db.update_ticket_status(interaction.channel_id, "deleted")
-            await TicketLogger.log_action(guild, ticket, "حذف التذكرة", member)
-            await asyncio.sleep(3)
+        staff_id = ticket.get("claimed_by")
+        owner = guild.get_member(ticket_user_id) if ticket_user_id else None
+        if owner and staff_id:
+            from bot.views.rating_view import RatingView
+            try:
+                rating_embed = EmbedBuilder.create_embed(
+                    title="⭐ تقييم خدمة الدعم الفني",
+                    description=f"مرحباً <@{ticket_user_id}> 👋، تم حذف تذكرتك بنجاح.\nيرجى تقييم الخدمة بالضغط على الأزرار أدناه:",
+                    color=EmbedBuilder.COLOR_PRIMARY
+                )
+                await owner.send(embed=rating_embed, view=RatingView(ticket['id'], staff_id, self.lang))
+            except: pass
+
+        db.update_ticket_status(interaction.channel_id, "deleted")
+        await TicketLogger.log_action(guild, ticket, "حذف التذكرة", member)
+        await asyncio.sleep(3)
+        try:
             await interaction.channel.delete()
+        except: pass
+
+    async def _execute_summon_staff(self, interaction, guild, member, ticket):
+        settings = db.get_guild_settings(guild.id) or {}
+        staff_role_id = settings.get("support_role_id")
+        role_mention = f"<@&{staff_role_id}>" if staff_role_id else "@everyone"
+        await interaction.channel.send(f"🔔 {role_mention}، العضو {member.mention} بحاجة للمساعدة!")
+        await interaction.followup.send("✅ تم إرسال نداء لطاقم الدعم.", ephemeral=True)
+
+    async def _execute_summon_member(self, interaction, guild, member, ticket):
+        owner_id = ticket.get("user_id")
+        owner = guild.get_member(owner_id) if owner_id else None
+        if owner:
+            embed = EmbedBuilder.create_embed(title="🔔 نداء حضور", description=f"مرحباً {owner.mention}، يرجى التواجد في التذكرة.", color=EmbedBuilder.COLOR_WARNING)
+            await interaction.channel.send(content=owner.mention, embed=embed)
+        await interaction.followup.send("✅ تم إرسال نداء لصاحب التذكرة.", ephemeral=True)
+
+    async def _execute_toggle_hide(self, interaction, guild, member, ticket):
+        is_hidden = ticket.get("is_hidden", 0)
+        new_hidden = 0 if is_hidden else 1
+        await PermissionHandler.set_ticket_visibility(interaction.channel, guild, ticket, is_hidden=bool(new_hidden))
+        await interaction.followup.send(f"✅ تم تغيير حالة التذكرة.", ephemeral=True)
+
+    async def _execute_lock(self, interaction, guild, member, ticket, ticket_user_id):
+        owner = guild.get_member(ticket_user_id) if ticket_user_id else None
+        if owner: await interaction.channel.set_permissions(owner, view_channel=False)
+        db.update_ticket_status(interaction.channel_id, "locked")
+        await interaction.followup.send("🔐 تم قفل التذكرة.")
+
+    async def _execute_unlock(self, interaction, guild, member, ticket, ticket_user_id):
+        owner = guild.get_member(ticket_user_id) if ticket_user_id else None
+        if owner: await interaction.channel.set_permissions(owner, view_channel=True, send_messages=True)
+        new_st = "claimed" if ticket.get("claimed_by") else "open"
+        db.update_ticket_status(interaction.channel_id, new_st)
+        await interaction.followup.send("🔓 تم فتح التذكرة.")
+
+    async def _execute_hold_resume(self, interaction, guild, member, ticket, ticket_user_id, action):
+        current_status = ticket.get("status", "open")
+        owner = guild.get_member(ticket_user_id) if ticket_user_id else None
+        if current_status == "on_hold" or action == "resume":
+            if owner: await interaction.channel.set_permissions(owner, view_channel=True, send_messages=True)
+            db.update_ticket_status(interaction.channel_id, "claimed" if ticket.get("claimed_by") else "open")
+            await interaction.followup.send("▶️ تم استئناف التذكرة.")
+        else:
+            if owner: await interaction.channel.set_permissions(owner, view_channel=True, send_messages=False)
+            db.update_ticket_status(interaction.channel_id, "on_hold")
+            await interaction.followup.send("⏸️ تم تعليق التذكرة.")
+
+    async def _execute_restart(self, interaction, guild, member, ticket):
+        is_hidden = ticket.get("is_hidden", 0)
+        await PermissionHandler.set_ticket_visibility(interaction.channel, guild, ticket, is_hidden=bool(is_hidden))
+        await interaction.followup.send("🔄 تم إعادة التحديث.", ephemeral=True)
+
+    async def _execute_info(self, interaction, ticket):
+        embed = EmbedBuilder.create_embed(title=f"📊 حالة التذكرة #{ticket.get('id')}", color=EmbedBuilder.COLOR_INFO)
+        embed.add_field(name="👤 صاحب التذكرة", value=f"<@{ticket.get('user_id')}>", inline=True)
+        embed.add_field(name="🔒 الحالة", value=ticket.get("status"), inline=True)
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
+    async def _execute_audit_log(self, interaction, ticket):
+        audits = db.get_audit_logs(ticket.get("id"))
+        log_text = "\n".join([f"• {a['action']} بواسطة <@{a['executor_id']}>" for a in audits[-5:]])
+        await interaction.followup.send(f"📜 سجل العمليات:\n{log_text or 'لا يوجد'}", ephemeral=True)
+
+    async def _execute_toggle_evidence(self, interaction, guild, member, ticket):
+        new_state = db.toggle_ticket_evidence(interaction.channel_id)
+        await interaction.followup.send(f"⚙️ حالة الأدلة: {'مفعلة' if new_state else 'معطلة'}")
+
+    async def _execute_view_evidence(self, interaction, ticket):
+        ev = db.get_ticket_evidence(ticket.get("id", 0))
+        await interaction.followup.send(f"📸 عدد الأدلة: {len(ev)}", ephemeral=True)
+
+    async def _execute_generate_transcript(self, interaction, guild, member, ticket):
+        from bot.utils.transcript_generator import TranscriptGenerator
+        await TranscriptGenerator.send_transcript(interaction.channel, ticket, guild, interaction)
 
 
 # Select Components

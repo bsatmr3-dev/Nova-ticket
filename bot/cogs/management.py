@@ -138,6 +138,32 @@ class TicketManagementCog(commands.Cog):
         if not await self.check_ticket_state(interaction, ticket, "close"):
             return
 
+        # Check for closure workflow bypass (Bot Owners only)
+        if not PermissionHandler.is_bot_owner(interaction.user.id):
+            closure_info = db.get_closure_info(ticket.get("id", 0))
+            if not closure_info:
+                from bot.views.closure_workflow import ClosureWorkflowView
+                workflow_view = ClosureWorkflowView(ticket.get("id"), "close")
+                
+                async def final_callback():
+                    # This is tricky because we need to trigger the logic again
+                    # But slash commands can't really be re-triggered easily
+                    # We can just call the close logic directly here if we had it extracted
+                    # For now, let's just use the view's embed
+                    pass
+
+                workflow_view.final_callback = final_callback
+                
+                embed = EmbedBuilder.create_embed(
+                    title="⚠️ متطلبات إغلاق التذكرة",
+                    description=(
+                        "يرجى استكمال بيانات الإغلاق أولاً عبر الأزرار في القائمة.\n"
+                        "يجب على صاحب التذكرة والموظف الإجابة على الأسئلة المطلوبة."
+                    ),
+                    color=EmbedBuilder.COLOR_WARNING
+                )
+                return await interaction.response.send_message(embed=embed, view=workflow_view)
+
         guild = interaction.guild
         member = interaction.user
         ticket_user_id = ticket.get("user_id")
@@ -327,6 +353,28 @@ class TicketManagementCog(commands.Cog):
         if not await self.check_ticket_state(interaction, ticket, "delete"):
             return
 
+        # Check for closure workflow bypass (Bot Owners only)
+        if not PermissionHandler.is_bot_owner(interaction.user.id):
+            closure_info = db.get_closure_info(ticket.get("id", 0))
+            if not closure_info:
+                from bot.views.closure_workflow import ClosureWorkflowView
+                workflow_view = ClosureWorkflowView(ticket.get("id"), "delete")
+                
+                async def final_callback():
+                    pass
+
+                workflow_view.final_callback = final_callback
+                
+                embed = EmbedBuilder.create_embed(
+                    title="⚠️ متطلبات حذف التذكرة",
+                    description=(
+                        "يرجى استكمال بيانات الإغلاق أولاً عبر الأزرار في القائمة.\n"
+                        "يجب على صاحب التذكرة والموظف الإجابة على الأسئلة المطلوبة قبل الحذف."
+                    ),
+                    color=EmbedBuilder.COLOR_WARNING
+                )
+                return await interaction.response.send_message(embed=embed, view=workflow_view)
+
         guild = interaction.guild
         member = interaction.user
         ticket_user_id = ticket.get("user_id")
@@ -478,6 +526,35 @@ class TicketManagementCog(commands.Cog):
             await interaction.response.send_message(content=owner.mention, embed=embed)
         else:
             await interaction.response.send_message(f"🔔 نداء حضور: صاحب التذكرة <@{owner_id}> يرجى التواجد ومتابعة الدعم الفني.")
+
+    @app_commands.command(name="closure_search", description="Retrieve closure details for a ticket / استرجاع بيانات إغلاق تذكرة")
+    @app_commands.describe(ticket_id="The ID of the ticket / رقم التذكرة")
+    async def closure_search(self, interaction: discord.Interaction, ticket_id: int):
+        if not PermissionHandler.is_staff(interaction.user):
+            return await interaction.response.send_message("❌ هذا الأمر مخصص للطاقم فقط.", ephemeral=True)
+
+        info = db.get_closure_info(ticket_id)
+        if not info:
+            return await interaction.response.send_message(f"❌ لم يتم العثور على بيانات إغلاق للتذكرة رقم #{ticket_id}.", ephemeral=True)
+
+        ticket = db.get_ticket_by_id(ticket_id)
+        
+        embed = EmbedBuilder.create_embed(
+            title=f"📋 بيانات إغلاق التذكرة #{ticket_id}",
+            color=EmbedBuilder.COLOR_INFO
+        )
+        
+        if ticket:
+            embed.add_field(name="👤 صاحب التذكرة", value=f"<@{ticket.get('user_id')}>", inline=True)
+            embed.add_field(name="👔 الموظف المستلم", value=f"<@{ticket.get('claimed_by')}>", inline=True)
+        
+        embed.add_field(name="✅ تم حل المشكلة؟", value="نعم" if info.get("user_handled") else "لا", inline=True)
+        embed.add_field(name="⚖️ نوع العقوبة", value=info.get("punishment_type", "غير محدد"), inline=True)
+        embed.add_field(name="📸 الأدلة", value=info.get("evidence_urls", "لا يوجد"), inline=False)
+        embed.add_field(name="📝 تفاصيل الموظف", value=info.get("staff_details", "لا يوجد"), inline=False)
+        embed.add_field(name="📅 تاريخ الإغلاق", value=info.get("created_at"), inline=False)
+
+        await interaction.response.send_message(embed=embed)
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(TicketManagementCog(bot))

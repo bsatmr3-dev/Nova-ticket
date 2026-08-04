@@ -22,6 +22,9 @@ class FeedbackModal(Modal):
 
     async def on_submit(self, interaction: discord.Interaction):
         try:
+            if db.has_ticket_been_rated(self.ticket_id):
+                return await interaction.response.send_message("❌ لقد قمت بتقييم هذه التذكرة بالفعل!", ephemeral=True)
+
             feedback_text = self.comment.value.strip() if self.comment.value else "بدون تعليق"
             db.add_rating(
                 ticket_id=self.ticket_id,
@@ -75,6 +78,9 @@ class RatingView(View):
 
     def make_callback(self, stars: int):
         async def callback(interaction: discord.Interaction):
+            if db.has_ticket_been_rated(self.ticket_id):
+                return await interaction.response.send_message("❌ لقد قمت بتقييم هذه التذكرة بالفعل!", ephemeral=True)
+            
             modal = FeedbackModal(ticket_id=self.ticket_id, staff_id=self.staff_id, stars=stars, lang=self.lang)
             await interaction.response.send_modal(modal)
         return callback
