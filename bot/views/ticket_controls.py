@@ -178,6 +178,8 @@ class TicketActionBase(Select):
             await self._execute_reopen(interaction, guild, member, ticket, ticket_user_id)
         elif action in ["hold", "resume", "hold_resume", "toggle_hold"]:
             await self._execute_hold_resume(interaction, guild, member, ticket, ticket_user_id, action)
+        elif action == "owner_details":
+            await self._execute_owner_details(interaction, guild, member, ticket, ticket_user_id)
         elif action == "restart":
             await self._execute_restart(interaction, guild, member, ticket)
         elif action == "info":
@@ -459,6 +461,69 @@ class TicketActionBase(Select):
         from bot.utils.transcript_generator import TranscriptGenerator
         await TranscriptGenerator.send_transcript(interaction.channel, ticket, guild, interaction)
 
+    async def _execute_owner_details(self, interaction, guild, member, ticket, ticket_user_id):
+        if not ticket_user_id:
+            return await interaction.followup.send("❌ تعذر تحديد صاحب التذكرة.", ephemeral=True)
+
+        owner = guild.get_member(ticket_user_id)
+        if not owner:
+            try: owner = await guild.fetch_member(ticket_user_id)
+            except:
+                try: owner = await interaction.client.fetch_user(ticket_user_id)
+                except: owner = None
+
+        inf_summary = db.get_user_infractions_summary(guild.id, ticket_user_id)
+        t_stats = db.get_user_ticket_stats(guild.id, ticket_user_id)
+
+        user_str = owner.mention if owner else f"<@{ticket_user_id}>"
+
+        embed = EmbedBuilder.create_embed(
+            title="👤 تفاصيل وإحصائيات صاحب التذكرة",
+            description=f"تقرير شامل وخاص بصاحب التذكرة {user_str} (`{ticket_user_id}`):\n\n───────────────────────",
+            color=EmbedBuilder.COLOR_PRIMARY
+        )
+
+        embed.add_field(
+            name="📊 إحصائيات التذاكر",
+            value=(
+                f"• **إجمالي التذاكر:** `{t_stats['total_tickets']}`\n"
+                f"• **التذاكر النشطة:** `{t_stats['open_tickets']}`\n"
+                f"• **التذاكر المغلقة:** `{t_stats['closed_tickets']}`"
+            ),
+            inline=True
+        )
+
+        has_infraction_text = "⚠️ يوجد سجل مخالفات" if inf_summary['total'] > 0 else "✅ سجل نظيف"
+        embed.add_field(
+            name="🛡️ سجل العقوبات والتحذيرات",
+            value=(
+                f"• **الحالة العامة:** {has_infraction_text}\n"
+                f"• **إجمالي المخالفات:** `{inf_summary['total']}`\n"
+                f"• **🗣️ شفهي:** `{inf_summary['verbal_warnings']}` | **⚠️ رسمي:** `{inf_summary['official_warnings']}`\n"
+                f"• **⏳ تايم أوت:** `{inf_summary['timeouts']}`"
+            ),
+            inline=False
+        )
+
+        infrs = db.get_user_infractions(guild.id, ticket_user_id)
+        if infrs:
+            recent_text = ""
+            type_emojis = {"verbal_warning": "🗣️ شفهي", "official_warning": "⚠️ رسمي", "timeout": "⏳ تايم أوت"}
+            for idx, inf in enumerate(infrs[:3], 1):
+                t_str = type_emojis.get(inf['infraction_type'], inf['infraction_type'])
+                dur = f" ({inf['duration_minutes']} دقيقة)" if inf.get('duration_minutes') else ""
+                recent_text += f"**{idx}.** النوع: `{t_str}{dur}` | السبب: {inf['reason'] or 'بدون سبب'}\n"
+            embed.add_field(
+                name="📋 آخر المخالفات المسجلة:",
+                value=recent_text,
+                inline=False
+            )
+
+        if owner and hasattr(owner, "display_avatar") and owner.display_avatar:
+            embed.set_thumbnail(url=owner.display_avatar.url)
+
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
 
 # Select Components
 class MemberActionsSelect(TicketActionBase):
@@ -479,6 +544,7 @@ class StaffManagementSelect(TicketActionBase):
         super().__init__(ticket=ticket, lang=lang, placeholder="👔 إدارة الطاقم", options=[
             discord.SelectOption(label="استلام التذكرة" if not claimed else "استلام (مستلمة)", value="claim", emoji="📌"),
             discord.SelectOption(label="إلغاء الاستلام", value="unclaim", emoji="🔓"),
+            discord.SelectOption(label="تفاصيل صاحب التذكرة", value="owner_details", emoji="👤"),
             discord.SelectOption(label="إعادة فتح التذكرة", value="reopen", emoji="🔓"),
             discord.SelectOption(label="نقل التذكرة", value="transfer", emoji="🔄"),
             discord.SelectOption(label="تغيير اسم التذكرة", value="rename", emoji="✏️"),

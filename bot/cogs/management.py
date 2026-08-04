@@ -691,5 +691,69 @@ class TicketManagementCog(commands.Cog):
 
         await interaction.response.send_message(embed=embed)
 
+    @app_commands.command(name="user_details", description="Show full details, ticket stats, and infractions for a member / تفاصيل صاحب التذكرة والعقوبات")
+    @app_commands.describe(member="Target member / العضو المستهدف")
+    async def user_details(self, interaction: discord.Interaction, member: discord.Member):
+        if not PermissionHandler.is_staff(interaction.user):
+            return await interaction.response.send_message("❌ هذا الأمر مخصص للإدارة وطاقم الدعم الفني فقط.", ephemeral=True)
+
+        guild = interaction.guild
+        summary = db.get_user_infractions_summary(guild.id, member.id)
+        infractions = db.get_user_infractions(guild.id, member.id)
+        t_stats = db.get_user_ticket_stats(guild.id, member.id)
+
+        has_infractions = "⚠️ نعم (يوجد سجل)" if summary['total'] > 0 else "✅ لا (سجل نظيف)"
+
+        embed = EmbedBuilder.create_embed(
+            title=f"👤 تفاصيل وإحصائيات العضو: {member.display_name}",
+            description=(
+                f"👤 **العضو:** {member.mention} (`{member.id}`)\n"
+                f"📅 **تاريخ الانضمام:** `{member.joined_at.strftime('%Y-%m-%d') if member.joined_at else 'غير معروف'}`\n\n"
+                f"───────────────────────"
+            ),
+            color=EmbedBuilder.COLOR_PRIMARY
+        )
+
+        embed.add_field(
+            name="📊 إحصائيات التذاكر",
+            value=(
+                f"• **إجمالي التذاكر المفتوحة سابقاً:** `{t_stats['total_tickets']}`\n"
+                f"• **التذاكر النشطة حالياً:** `{t_stats['open_tickets']}`\n"
+                f"• **التذاكر المغلقة:** `{t_stats['closed_tickets']}`"
+            ),
+            inline=False
+        )
+
+        embed.add_field(
+            name="🛡️ سجل العقوبات والتحذيرات",
+            value=(
+                f"• **حالة السجل:** {has_infractions}\n"
+                f"• **🗣️ تحذيرات شفهية:** `{summary['verbal_warnings']}`\n"
+                f"• **⚠️ تحذيرات رسمية:** `{summary['official_warnings']}`\n"
+                f"• **⏳ عقوبات تايم أوت:** `{summary['timeouts']}`\n"
+                f"• **📈 إجمالي المخالفات المسجلة:** `{summary['total']}`"
+            ),
+            inline=False
+        )
+
+        if infractions:
+            recent_text = ""
+            type_emojis = {"verbal_warning": "🗣️ شفهي", "official_warning": "⚠️ رسمي", "timeout": "⏳ تايم أوت"}
+            for idx, inf in enumerate(infractions[:5], 1):
+                t_str = type_emojis.get(inf.get('infraction_type'), inf.get('infraction_type'))
+                dur = f" ({inf['duration_minutes']} دقيقة)" if inf.get('duration_minutes') else ""
+                reason = inf.get('reason') or "بدون سبب مدون"
+                recent_text += f"**{idx}.** `{t_str}{dur}` | السبب: {reason}\n"
+            embed.add_field(
+                name="📋 آخر المخالفات المسجلة:",
+                value=recent_text,
+                inline=False
+            )
+
+        if member.display_avatar:
+            embed.set_thumbnail(url=member.display_avatar.url)
+
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
 async def setup(bot: commands.Bot):
     await bot.add_cog(TicketManagementCog(bot))

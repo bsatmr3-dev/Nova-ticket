@@ -132,6 +132,41 @@ class ClosureWorkflowView(View):
         self.add_item(btn_yes)
         self.add_item(btn_no)
 
+        btn_skip = Button(label="⏩ تخطي الاستبيان (إنهاء فوراً)", style=discord.ButtonStyle.secondary, custom_id="skip_survey")
+        btn_skip.callback = self.skip_survey_callback
+        self.add_item(btn_skip)
+
+    async def skip_survey_callback(self, interaction: discord.Interaction):
+        self.user_answered = True
+        self.staff_answered = True
+        self.staff_details = "تم تخطي الاستبيان"
+
+        db.save_closure_info(
+            ticket_id=self.ticket_id,
+            user_handled=1,
+            staff_punished=0,
+            evidence_urls="",
+            punishment_type="none",
+            staff_details=self.staff_details,
+            ticket_type=self.ticket_type or "general",
+            complaint_accepted=0,
+            punished_user_id=0,
+            timeout_duration=0
+        )
+
+        embed = EmbedBuilder.create_embed(
+            title="⏩ تم تخطي الاستبيان",
+            description="تم تخطي الاستبيان بنجاح وجاري استكمال إجراءات الإغلاق...",
+            color=EmbedBuilder.COLOR_PRIMARY
+        )
+        if interaction.response.is_done():
+            await interaction.followup.send(embed=embed)
+        else:
+            await interaction.response.send_message(embed=embed)
+
+        if self.final_callback:
+            await self.final_callback()
+
     async def user_type_callback(self, interaction: discord.Interaction):
         ticket = db.get_ticket_by_id(self.ticket_id)
         if interaction.user.id != ticket.get("user_id"):
@@ -192,6 +227,10 @@ class ClosureWorkflowView(View):
         btn_modal = Button(label="📝 تعبئة بيانات الحيثيات والتفاصيل", style=discord.ButtonStyle.primary)
         btn_modal.callback = self.staff_modal_trigger
         self.add_item(btn_modal)
+
+        btn_skip = Button(label="⏩ تخطي الاستبيان (إنهاء فوراً)", style=discord.ButtonStyle.secondary, custom_id="skip_survey_staff")
+        btn_skip.callback = self.skip_survey_callback
+        self.add_item(btn_skip)
 
     async def staff_complaint_option_callback(self, interaction: discord.Interaction):
         ticket = db.get_ticket_by_id(self.ticket_id)

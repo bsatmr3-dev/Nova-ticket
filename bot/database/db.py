@@ -578,6 +578,17 @@ class DatabaseManager:
     def update_ticket_owner(self, channel_id: int, new_user_id: int):
         self._run_query("UPDATE tickets SET user_id = ? WHERE channel_id = ?", (new_user_id, channel_id))
 
+    def get_user_ticket_stats(self, guild_id: int, user_id: int) -> Dict[str, int]:
+        all_user_tickets = self._run_query("SELECT status FROM tickets WHERE guild_id = ? AND user_id = ?", (guild_id, user_id), fetch="all") or []
+        total = len(all_user_tickets)
+        open_cnt = sum(1 for t in all_user_tickets if t.get("status") in ["open", "claimed", "on_hold"])
+        closed_cnt = sum(1 for t in all_user_tickets if t.get("status") in ["closed", "deleted"])
+        return {
+            "total_tickets": total,
+            "open_tickets": open_cnt,
+            "closed_tickets": closed_cnt
+        }
+
     # --- Evidence Operations ---
     def add_evidence(self, ticket_id: int, channel_id: int, user_id: int, evidence_url: str, note: str = None) -> int:
         return self._run_query("""
