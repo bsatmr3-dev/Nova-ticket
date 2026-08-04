@@ -319,6 +319,21 @@ class DatabaseManager:
                     evidence_urls {text_type},
                     punishment_type {text_type},
                     staff_details {text_type},
+                    ticket_type {text_type} DEFAULT 'general',
+                    complaint_accepted {int_type} DEFAULT 0,
+                    punished_user_id BIGINT DEFAULT 0,
+                    timeout_duration {int_type} DEFAULT 0,
+                    created_at {text_type} NOT NULL
+                )""",
+                f"""CREATE TABLE IF NOT EXISTS user_infractions (
+                    id {pk_type},
+                    guild_id BIGINT NOT NULL,
+                    user_id BIGINT NOT NULL,
+                    infraction_type {text_type} NOT NULL,
+                    reason {text_type},
+                    duration_minutes {int_type} DEFAULT 0,
+                    executor_id BIGINT NOT NULL,
+                    ticket_id {int_type} DEFAULT 0,
                     created_at {text_type} NOT NULL
                 )"""
             ]
@@ -326,7 +341,7 @@ class DatabaseManager:
             for q in queries:
                 cursor.execute(q)
             
-            # Column addition checks for tickets table
+            # Column addition checks
             if backend == "postgres":
                 try:
                     cursor.execute("""
@@ -344,6 +359,11 @@ class DatabaseManager:
                     """)
                     if not cursor.fetchone():
                         cursor.execute("ALTER TABLE tickets ADD COLUMN evidence_enabled INTEGER DEFAULT 1;")
+
+                    for col, col_type in [("ticket_type", "VARCHAR(255) DEFAULT 'general'"), ("complaint_accepted", "INTEGER DEFAULT 0"), ("punished_user_id", "BIGINT DEFAULT 0"), ("timeout_duration", "INTEGER DEFAULT 0")]:
+                        cursor.execute(f"SELECT column_name FROM information_schema.columns WHERE table_name='closure_info' AND column_name='{col}';")
+                        if not cursor.fetchone():
+                            cursor.execute(f"ALTER TABLE closure_info ADD COLUMN {col} {col_type};")
                 except Exception as e:
                     sys.stderr.write(f"[DB_MIGRATION] Migration check failed: {e}\n")
             else:
@@ -354,6 +374,17 @@ class DatabaseManager:
                         cursor.execute("ALTER TABLE tickets ADD COLUMN category_points INTEGER DEFAULT 0;")
                     if "evidence_enabled" not in cols:
                         cursor.execute("ALTER TABLE tickets ADD COLUMN evidence_enabled INTEGER DEFAULT 1;")
+
+                    cursor.execute("PRAGMA table_info(closure_info)")
+                    c_cols = [row[1] for row in cursor.fetchall()]
+                    if "ticket_type" not in c_cols:
+                        cursor.execute("ALTER TABLE closure_info ADD COLUMN ticket_type TEXT DEFAULT 'general';")
+                    if "complaint_accepted" not in c_cols:
+                        cursor.execute("ALTER TABLE closure_info ADD COLUMN complaint_accepted INTEGER DEFAULT 0;")
+                    if "punished_user_id" not in c_cols:
+                        cursor.execute("ALTER TABLE closure_info ADD COLUMN punished_user_id BIGINT DEFAULT 0;")
+                    if "timeout_duration" not in c_cols:
+                        cursor.execute("ALTER TABLE closure_info ADD COLUMN timeout_duration INTEGER DEFAULT 0;")
                 except Exception as e:
                     sys.stderr.write(f"[DB_MIGRATION] SQLite migration check failed: {e}\n")
 
@@ -622,14 +653,21 @@ class DatabaseManager:
 
     def save_closure_info(self, ticket_id: int, **kwargs):
         self._run_query("""
-        INSERT INTO closure_info (ticket_id, user_handled, staff_punished, evidence_urls, punishment_type, staff_details, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO closure_info (
+            ticket_id, user_handled, staff_punished, evidence_urls, punishment_type,
+            staff_details, ticket_type, complaint_accepted, punished_user_id, timeout_duration, created_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT (ticket_id) DO UPDATE SET
             user_handled = EXCLUDED.user_handled,
             staff_punished = EXCLUDED.staff_punished,
             evidence_urls = EXCLUDED.evidence_urls,
             punishment_type = EXCLUDED.punishment_type,
-            staff_details = EXCLUDED.staff_details
+            staff_details = EXCLUDED.staff_details,
+            ticket_type = EXCLUDED.ticket_type,
+            complaint_accepted = EXCLUDED.complaint_accepted,
+            punished_user_id = EXCLUDED.punished_user_id,
+            timeout_duration = EXCLUDED.timeout_duration
         """, (
             ticket_id,
             kwargs.get("user_handled", 0),
@@ -637,11 +675,51 @@ class DatabaseManager:
             kwargs.get("evidence_urls", ""),
             kwargs.get("punishment_type", ""),
             kwargs.get("staff_details", ""),
+            kwargs.get("ticket_type", "general"),
+            kwargs.get("complaint_accepted", 0),
+            kwargs.get("punished_user_id", 0),
+            kwargs.get("timeout_duration", 0),
             datetime.utcnow().isoformat()
         ))
 
     def get_closure_info(self, ticket_id: int) -> Optional[Dict[str, Any]]:
         return self._run_query("SELECT * FROM closure_info WHERE ticket_id = ?", (ticket_id,), fetch="one")
+
+    # --- User Infractions & Warnings ---
+    def add_infraction(self, guild_id: int, user_id: int, infraction_type: str, reason: str, duration_minutes: int, executor_id: int, ticket_id: int) -> int:
+        return self._run_query("""
+        INSERT INTO user_infractions (guild_id, user_id, infraction_type, reason, duration_minutes, executor_id, ticket_id, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (guild_id, user_id, infraction_type, reason, duration_minutes, executor_id, ticket_id, datetime.utcnow().isoformat()))
+
+    def get_user_infractions(self, guild_id: int, user_id: int) -> List[Dict[str, Any]]:
+        return self._run_query("""
+        SELECT * FROM user_infractions WHERE guild_id = ? AND user_id = ? ORDER BY id DESC
+        """, (guild_id, user_id), fetch="all") or []
+
+    def get_user_infractions_summary(self, guild_id: int, user_id: int) -> Dict[str, int]:
+        infractions = self.get_user_infractions(guild_id, user_id)
+        verbal_count = sum(1 for i in infractions if i.get("infraction_type") == "verbal_warning")
+        official_count = sum(1 for i in infractions if i.get("infraction_type") == "official_warning")
+        timeout_count = sum(1 for i in infractions if i.get("infraction_type") == "timeout")
+        return {
+            "verbal_warnings": verbal_count,
+            "official_warnings": official_count,
+            "timeouts": timeout_count,
+            "total": len(infractions)
+        }
+
+    def delete_rating_by_user_and_staff(self, user_id: int, staff_id: int, guild_id: int) -> int:
+        ratings = self._run_query("""
+        SELECT id FROM ratings WHERE user_id = ? AND staff_id = ?
+        """, (user_id, staff_id), fetch="all") or []
+        if not ratings:
+            return 0
+        
+        count = len(ratings)
+        self._run_query("DELETE FROM ratings WHERE user_id = ? AND staff_id = ?", (user_id, staff_id))
+        self.recalculate_staff_rating_stats(guild_id, staff_id)
+        return count
 
     def get_staff_ratings(self, staff_id: int) -> List[Dict[str, Any]]:
         return self._run_query("SELECT * FROM ratings WHERE staff_id = ? ORDER BY id DESC", (staff_id,), fetch="all") or []

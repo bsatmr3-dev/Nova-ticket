@@ -50,15 +50,16 @@ class StatsCog(commands.Cog):
             staff_mention = f"<@{r['staff_id']}>"
             user_mention = f"<@{r['user_id']}>"
             feedback = r['feedback'] or "بدون تعليق"
+            rating_id = r.get("id")
             embed.add_field(
-                name=f"Rating by {user_mention}",
-                value=f"Staff: {staff_mention}\nStars: {'⭐' * r['stars']}\nFeedback: {feedback}\nDate: {r['created_at'][:10]}",
+                name=f"Rating #{rating_id} by {user_mention}",
+                value=f"• **Staff:** {staff_mention}\n• **Stars:** {'⭐' * r['stars']}\n• **Feedback:** {feedback}\n• **Date:** {str(r['created_at'])[:10]}",
                 inline=False
             )
         await interaction.response.send_message(embed=embed)
 
-    @app_commands.command(name="delete_rating", description="Delete a specific rating / حذف تقييم محدد")
-    @app_commands.describe(rating_id="The ID of the rating to delete")
+    @app_commands.command(name="delete_rating", description="Delete a specific rating by ID / حذف تقييم محدد برقم التقييم")
+    @app_commands.describe(rating_id="رقم التقييم المراد حذفه")
     async def delete_rating(self, interaction: discord.Interaction, rating_id: int):
         from bot.utils.permissions import PermissionHandler
         if not PermissionHandler.is_staff(interaction.user):
@@ -66,6 +67,20 @@ class StatsCog(commands.Cog):
             
         db.delete_rating(rating_id)
         await interaction.response.send_message(f"✅ تم حذف التقييم رقم #{rating_id} بنجاح.", ephemeral=True)
+
+    @app_commands.command(name="delete_user_rating", description="Delete rating from a specific user for a specific staff / حذف تقييم عضو لإداري معين")
+    @app_commands.describe(member="العضو صاحب التقييم", staff="الموظف/الإداري المقيّم")
+    async def delete_user_rating(self, interaction: discord.Interaction, member: discord.Member, staff: discord.Member):
+        from bot.utils.permissions import PermissionHandler
+        if not PermissionHandler.is_staff(interaction.user):
+            return await interaction.response.send_message("❌ ليس لديك صلاحية لحذف التقييمات.", ephemeral=True)
+
+        guild_id = interaction.guild_id or 0
+        deleted_count = db.delete_rating_by_user_and_staff(member.id, staff.id, guild_id)
+        if deleted_count > 0:
+            await interaction.response.send_message(f"✅ تم حذف {deleted_count} تقييم مقدم من {member.mention} للإداري {staff.mention} بنجاح.", ephemeral=True)
+        else:
+            await interaction.response.send_message(f"❌ لم يتم العثور على أي تقييم مقدم من {member.mention} للإداري {staff.mention}.", ephemeral=True)
 
     @app_commands.command(name="clear_ratings", description="Clear staff ratings / مسح تقييمات موظف")
     @app_commands.describe(staff="The staff member to clear ratings for (leave empty for all)")

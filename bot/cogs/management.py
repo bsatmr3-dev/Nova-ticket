@@ -191,9 +191,9 @@ class TicketManagementCog(commands.Cog):
         except Exception as e:
             print(f"Error sending transcript on close_ticket: {e}")
 
-        # Send rating DM to owner if ticket was claimed
+        # Send rating DM to owner if ticket was claimed and not previously rated
         staff_id = ticket.get("claimed_by")
-        if owner and ticket_user_id and staff_id:
+        if owner and ticket_user_id and staff_id and not db.has_ticket_been_rated(ticket.get("id", 0)):
             from bot.views.rating_view import RatingView
             try:
                 staff_member = guild.get_member(staff_id)
@@ -208,11 +208,15 @@ class TicketManagementCog(commands.Cog):
                 lang = settings.get("language", "ar")
 
                 rating_embed = EmbedBuilder.create_embed(
-                    title="⭐ تقييم خدمة الدعم الفني",
+                    title="📋 استبيان وتحديد تقييم خدمة الدعم الفني",
                     description=(
                         f"مرحباً <@{ticket_user_id}> 👋،\n"
                         f"تم إغلاق تذكرتك بنجاح في سيرفر **{guild.name}**.\n\n"
-                        f"👤 **مستلم التذكرة / المسؤول:** {staff_mention}\n\n"
+                        f"📊 **تفاصيل استبيان التذكرة المغلقة:**\n"
+                        f"• **رقم التذكرة:** `#{ticket.get('id')}`\n"
+                        f"• **المسؤول / مستلم التذكرة:** {staff_mention}\n"
+                        f"• **الحالة:** تم الإنهاء والإغلاق ✅\n\n"
+                        f"⭐ **استبيان الرضا وتقييم الخدمة:**\n"
                         f"يرجى تقييم أداء الموظف وجودة الخدمة التي تلقيتها بالضغط على الأزرار أدناه (1 إلى 5 نجوم):"
                     ),
                     color=EmbedBuilder.COLOR_PRIMARY
@@ -397,7 +401,7 @@ class TicketManagementCog(commands.Cog):
                     owner = None
 
         staff_id = ticket.get("claimed_by")
-        if owner and ticket_user_id and staff_id:
+        if owner and ticket_user_id and staff_id and not db.has_ticket_been_rated(ticket.get("id", 0)):
             from bot.views.rating_view import RatingView
             try:
                 staff_member = guild.get_member(staff_id)
@@ -412,11 +416,14 @@ class TicketManagementCog(commands.Cog):
                 lang = settings.get("language", "ar")
 
                 rating_embed = EmbedBuilder.create_embed(
-                    title="⭐ تقييم خدمة الدعم الفني",
+                    title="📋 استبيان وتحديد تقييم خدمة الدعم الفني",
                     description=(
                         f"مرحباً <@{ticket_user_id}> 👋،\n"
                         f"تم حذف تذكرتك في سيرفر **{guild.name}**.\n\n"
-                        f"👤 **مستلم التذكرة / المسؤول:** {staff_mention}\n\n"
+                        f"📊 **تفاصيل استبيان التذكرة المحذوفة:**\n"
+                        f"• **رقم التذكرة:** `#{ticket.get('id')}`\n"
+                        f"• **المسؤول / مستلم التذكرة:** {staff_mention}\n\n"
+                        f"⭐ **استبيان الرضا وتقييم الخدمة:**\n"
                         f"يرجى تقييم أداء الموظف وجودة الخدمة التي تلقيتها بالضغط على الأزرار أدناه (1 إلى 5 نجوم):"
                     ),
                     color=EmbedBuilder.COLOR_PRIMARY
@@ -429,6 +436,50 @@ class TicketManagementCog(commands.Cog):
         await TicketLogger.log_action(guild, ticket, "حذف التذكرة", member)
         await asyncio.sleep(3)
         await interaction.channel.delete(reason=f"Ticket deleted by {interaction.user.name}")
+
+    @app_commands.command(name="reopen", description="Reopen a closed ticket / إعادة فتح التذكرة المغلقة")
+    async def reopen(self, interaction: discord.Interaction):
+        ticket = db.get_ticket_by_channel(interaction.channel_id)
+        if not ticket:
+            return await interaction.response.send_message("❌ هذه القناة ليست قناة تذكرة صالحة.", ephemeral=True)
+
+        if not await self.check_ticket_state(interaction, ticket, "reopen"):
+            return
+
+        guild = interaction.guild
+        member = interaction.user
+        ticket_user_id = ticket.get("user_id")
+
+        owner = guild.get_member(ticket_user_id) if ticket_user_id else None
+        if not owner and ticket_user_id:
+            try:
+                owner = await guild.fetch_member(ticket_user_id)
+            except Exception:
+                try:
+                    owner = await self.bot.fetch_user(ticket_user_id)
+                except Exception:
+                    owner = None
+
+        if owner and isinstance(owner, discord.Member):
+            await interaction.channel.set_permissions(
+                owner,
+                view_channel=True,
+                send_messages=True,
+                attach_files=True,
+                embed_links=True,
+                read_message_history=True
+            )
+
+        new_status = "claimed" if ticket.get("claimed_by") else "open"
+        db.update_ticket_status(interaction.channel_id, new_status)
+
+        embed = EmbedBuilder.create_embed(
+            title="🔓 تم إعادة فتح التذكرة",
+            description=f"تم إعادة فتح التذكرة بنجاح بواسطة {member.mention}.",
+            color=EmbedBuilder.COLOR_SUCCESS
+        )
+        await interaction.response.send_message(embed=embed)
+        await TicketLogger.log_action(guild, ticket, "إعادة فتح التذكرة", member)
 
     @app_commands.command(name="add_member", description="Add user to ticket / إضافة عضو للتذكرة")
     async def add_member(self, interaction: discord.Interaction, member: discord.Member):
@@ -540,7 +591,7 @@ class TicketManagementCog(commands.Cog):
         ticket = db.get_ticket_by_id(ticket_id)
         
         embed = EmbedBuilder.create_embed(
-            title=f"📋 بيانات إغلاق التذكرة #{ticket_id}",
+            title=f"📋 بيانات واستبيان إغلاق التذكرة #{ticket_id}",
             color=EmbedBuilder.COLOR_INFO
         )
         
@@ -548,11 +599,95 @@ class TicketManagementCog(commands.Cog):
             embed.add_field(name="👤 صاحب التذكرة", value=f"<@{ticket.get('user_id')}>", inline=True)
             embed.add_field(name="👔 الموظف المستلم", value=f"<@{ticket.get('claimed_by')}>", inline=True)
         
-        embed.add_field(name="✅ تم حل المشكلة؟", value="نعم" if info.get("user_handled") else "لا", inline=True)
-        embed.add_field(name="⚖️ نوع العقوبة", value=info.get("punishment_type", "غير محدد"), inline=True)
-        embed.add_field(name="📸 الأدلة", value=info.get("evidence_urls", "لا يوجد"), inline=False)
-        embed.add_field(name="📝 تفاصيل الموظف", value=info.get("staff_details", "لا يوجد"), inline=False)
-        embed.add_field(name="📅 تاريخ الإغلاق", value=info.get("created_at"), inline=False)
+        t_type = info.get("ticket_type", "general")
+        type_str = "🚨 شكوى" if t_type == "complaint" else ("💡 اقتراح" if t_type == "suggestion" else "💬 استفسار/عام")
+        embed.add_field(name="🏷️ نوع التذكرة", value=type_str, inline=True)
+
+        accepted_str = "✅ تم قبولها / التعامل بنجاح" if info.get("complaint_accepted") else "❌ لم يتم القبول / تعذر التعامل"
+        embed.add_field(name="📊 حالة الطلب / الشكوى", value=accepted_str, inline=True)
+
+        embed.add_field(name="🙋‍♂️ إجابة العضو (تم الحل؟)", value="نعم" if info.get("user_handled") else "لا", inline=True)
+
+        p_type = info.get("punishment_type", "none")
+        p_str = p_type
+        if p_type == "timeout": p_str = f"⏳ تايم أوت ({info.get('timeout_duration', 0)} دقيقة)"
+        elif p_type == "official_warning": p_str = "⚠️ تحذير رسمي"
+        elif p_type == "verbal_warning": p_str = "🗣️ تحذير شفهي"
+        elif p_type == "friendly": p_str = "🤝 تم حلها ودي"
+        elif p_type == "none": p_str = "❌ لا يوجد عقوبة"
+
+        embed.add_field(name="⚖️ العقوبة المتخذة", value=p_str, inline=True)
+
+        punished_id = info.get("punished_user_id", 0)
+        if punished_id and punished_id > 0:
+            embed.add_field(name="👤 العضو المعاقب", value=f"<@{punished_id}>", inline=True)
+
+        embed.add_field(name="📸 الأدلة المرفقة", value=info.get("evidence_urls") or "لا يوجد", inline=False)
+        embed.add_field(name="📝 تفاصيل وحيثيات الموظف", value=info.get("staff_details") or "لا يوجد", inline=False)
+        embed.add_field(name="📅 تاريخ الإغلاق", value=str(info.get("created_at")), inline=False)
+
+        await interaction.response.send_message(embed=embed)
+
+    @app_commands.command(name="user_infractions", description="Show infractions and warnings history for a member / عرض سجل عقوبات العضو")
+    @app_commands.describe(member="Target member / العضو المستهدف")
+    async def user_infractions(self, interaction: discord.Interaction, member: discord.Member):
+        if not PermissionHandler.is_staff(interaction.user):
+            return await interaction.response.send_message("❌ هذا الأمر مخصص للإدارة وطاقم الدعم الفني فقط.", ephemeral=True)
+
+        guild = interaction.guild
+        summary = db.get_user_infractions_summary(guild.id, member.id)
+        infractions = db.get_user_infractions(guild.id, member.id)
+
+        embed = EmbedBuilder.create_embed(
+            title=f"📜 سجل عقوبات وتحذيرات العضو: {member.display_name}",
+            description=(
+                f"👤 **العضو:** {member.mention} (`{member.id}`)\n\n"
+                f"📊 **ملخص العقوبات:**\n"
+                f"• 🗣️ **التحذيرات الشفهية:** `{summary['verbal_warnings']}`\n"
+                f"• ⚠️ **التحذيرات الرسمية:** `{summary['official_warnings']}`\n"
+                f"• ⏳ **عقوبات التايم أوت:** `{summary['timeouts']}`\n"
+                f"• 📈 **الإجمالي:** `{summary['total']}`"
+            ),
+            color=EmbedBuilder.COLOR_PRIMARY if infractions else EmbedBuilder.COLOR_SUCCESS
+        )
+
+        if not infractions:
+            embed.add_field(
+                name="✅ السجل نظيف",
+                value="هذا العضو لا يملك أي تحذيرات أو عقوبات سابقة في السيرفر.",
+                inline=False
+            )
+        else:
+            recent_infractions = infractions[:10]  # Show last 10
+            for idx, inf in enumerate(recent_infractions, start=1):
+                itype = inf.get("infraction_type")
+                if itype == "timeout":
+                    type_title = f"⏳ تايم أوت ({inf.get('duration_minutes', 0)} دقيقة)"
+                elif itype == "official_warning":
+                    type_title = "⚠️ تحذير رسمي"
+                elif itype == "verbal_warning":
+                    type_title = "🗣️ تحذير شفهي"
+                else:
+                    type_title = f"⚖️ {itype}"
+
+                ticket_id = inf.get("ticket_id", 0)
+                ticket_str = f"`#{ticket_id}`" if ticket_id else "غير محدد"
+                executor_id = inf.get("executor_id", 0)
+                executor_str = f"<@{executor_id}>" if executor_id else "النظام"
+                reason_str = inf.get("reason") or "بدون سبب مدون"
+
+                created = str(inf.get("created_at", ""))[:16].replace("T", " ")
+
+                embed.add_field(
+                    name=f"مخالفة #{idx} - {type_title}",
+                    value=(
+                        f"• **المسؤول:** {executor_str}\n"
+                        f"• **التذكرة:** {ticket_str}\n"
+                        f"• **السبب:** {reason_str}\n"
+                        f"• **التاريخ:** `{created}`"
+                    ),
+                    inline=False
+                )
 
         await interaction.response.send_message(embed=embed)
 

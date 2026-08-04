@@ -63,7 +63,7 @@ class TicketActionBase(Select):
         # Specific user-friendly checks for staff/administration actions
         staff_actions = [
             "claim", "unclaim", "transfer", "toggle_hide", "department", "priority",
-            "lock", "unlock", "hold", "resume", "hold_resume", "toggle_hold", "add_note",
+            "lock", "unlock", "reopen", "hold", "resume", "hold_resume", "toggle_hold", "add_note",
             "audit_log", "generate_transcript", "delete", "rename", "summon_member", "owner",
             "toggle_evidence", "view_evidence"
         ]
@@ -174,6 +174,8 @@ class TicketActionBase(Select):
             await self._execute_lock(interaction, guild, member, ticket, ticket_user_id)
         elif action == "unlock":
             await self._execute_unlock(interaction, guild, member, ticket, ticket_user_id)
+        elif action == "reopen":
+            await self._execute_reopen(interaction, guild, member, ticket, ticket_user_id)
         elif action in ["hold", "resume", "hold_resume", "toggle_hold"]:
             await self._execute_hold_resume(interaction, guild, member, ticket, ticket_user_id, action)
         elif action == "restart":
@@ -270,12 +272,27 @@ class TicketActionBase(Select):
             print(f"Error sending transcript on close: {e}")
 
         staff_id = ticket.get("claimed_by")
-        if owner and ticket_user_id and staff_id:
+        if owner and ticket_user_id and staff_id and not db.has_ticket_been_rated(ticket.get("id", 0)):
             from bot.views.rating_view import RatingView
             try:
+                staff_member = guild.get_member(staff_id)
+                if not staff_member:
+                    try: staff_member = await guild.fetch_member(staff_id)
+                    except: staff_member = None
+                staff_mention = staff_member.mention if staff_member else f"<@{staff_id}>"
+
                 rating_embed = EmbedBuilder.create_embed(
-                    title="⭐ تقييم خدمة الدعم الفني",
-                    description=f"مرحباً <@{ticket_user_id}> 👋، تم إغلاق تذكرتك بنجاح.\nيرجى تقييم الخدمة بالضغط على الأزرار أدناه:",
+                    title="📋 استبيان وتحديد تقييم خدمة الدعم الفني",
+                    description=(
+                        f"مرحباً <@{ticket_user_id}> 👋،\n"
+                        f"تم إغلاق تذكرتك بنجاح في سيرفر **{guild.name}**.\n\n"
+                        f"📊 **تفاصيل استبيان التذكرة المغلقة:**\n"
+                        f"• **رقم التذكرة:** `#{ticket.get('id')}`\n"
+                        f"• **المسؤول / مستلم التذكرة:** {staff_mention}\n"
+                        f"• **الحالة:** تم الإنهاء والإغلاق ✅\n\n"
+                        f"⭐ **استبيان الرضا وتقييم الخدمة:**\n"
+                        f"يرجى تقييم أداء الموظف وجودة الخدمة التي تلقيتها بالضغط على الأزرار أدناه (1 إلى 5 نجوم):"
+                    ),
                     color=EmbedBuilder.COLOR_PRIMARY
                 )
                 await owner.send(embed=rating_embed, view=RatingView(ticket['id'], staff_id, self.lang))
@@ -296,16 +313,37 @@ class TicketActionBase(Select):
 
         staff_id = ticket.get("claimed_by")
         owner = guild.get_member(ticket_user_id) if ticket_user_id else None
-        if owner and staff_id:
+        if not owner and ticket_user_id:
+            try: owner = await guild.fetch_member(ticket_user_id)
+            except:
+                try: owner = await interaction.client.fetch_user(ticket_user_id)
+                except: owner = None
+
+        if owner and staff_id and not db.has_ticket_been_rated(ticket.get("id", 0)):
             from bot.views.rating_view import RatingView
             try:
+                staff_member = guild.get_member(staff_id)
+                if not staff_member:
+                    try: staff_member = await guild.fetch_member(staff_id)
+                    except: staff_member = None
+                staff_mention = staff_member.mention if staff_member else f"<@{staff_id}>"
+
                 rating_embed = EmbedBuilder.create_embed(
-                    title="⭐ تقييم خدمة الدعم الفني",
-                    description=f"مرحباً <@{ticket_user_id}> 👋، تم حذف تذكرتك بنجاح.\nيرجى تقييم الخدمة بالضغط على الأزرار أدناه:",
+                    title="📋 استبيان وتحديد تقييم خدمة الدعم الفني",
+                    description=(
+                        f"مرحباً <@{ticket_user_id}> 👋،\n"
+                        f"تم حذف تذكرتك في سيرفر **{guild.name}**.\n\n"
+                        f"📊 **تفاصيل استبيان التذكرة المحذوفة:**\n"
+                        f"• **رقم التذكرة:** `#{ticket.get('id')}`\n"
+                        f"• **المسؤول / مستلم التذكرة:** {staff_mention}\n\n"
+                        f"⭐ **استبيان الرضا وتقييم الخدمة:**\n"
+                        f"يرجى تقييم أداء الموظف وجودة الخدمة التي تلقيتها بالضغط على الأزرار أدناه (1 إلى 5 نجوم):"
+                    ),
                     color=EmbedBuilder.COLOR_PRIMARY
                 )
                 await owner.send(embed=rating_embed, view=RatingView(ticket['id'], staff_id, self.lang))
-            except: pass
+            except Exception as e:
+                print(f"Error sending rating DM on delete: {e}")
 
         db.update_ticket_status(interaction.channel_id, "deleted")
         await TicketLogger.log_action(guild, ticket, "حذف التذكرة", member)
@@ -313,6 +351,39 @@ class TicketActionBase(Select):
         try:
             await interaction.channel.delete()
         except: pass
+
+    async def _execute_reopen(self, interaction, guild, member, ticket, ticket_user_id):
+        owner = guild.get_member(ticket_user_id) if ticket_user_id else None
+        if not owner and ticket_user_id:
+            try: owner = await guild.fetch_member(ticket_user_id)
+            except Exception:
+                try: owner = await interaction.client.fetch_user(ticket_user_id)
+                except Exception: owner = None
+
+        if owner and isinstance(owner, discord.Member):
+            await interaction.channel.set_permissions(
+                owner,
+                view_channel=True,
+                send_messages=True,
+                attach_files=True,
+                embed_links=True,
+                read_message_history=True
+            )
+
+        new_status = "claimed" if ticket.get("claimed_by") else "open"
+        db.update_ticket_status(interaction.channel_id, new_status)
+
+        embed = EmbedBuilder.create_embed(
+            title="🔓 تم إعادة فتح التذكرة",
+            description=f"تم إعادة فتح التذكرة بنجاح بواسطة {member.mention}.",
+            color=EmbedBuilder.COLOR_SUCCESS
+        )
+        if interaction.response.is_done():
+            await interaction.followup.send(embed=embed)
+        else:
+            await interaction.response.send_message(embed=embed)
+
+        await TicketLogger.log_action(guild, ticket, "إعادة فتح التذكرة", member)
 
     async def _execute_summon_staff(self, interaction, guild, member, ticket):
         settings = db.get_guild_settings(guild.id) or {}
@@ -408,6 +479,7 @@ class StaffManagementSelect(TicketActionBase):
         super().__init__(ticket=ticket, lang=lang, placeholder="👔 إدارة الطاقم", options=[
             discord.SelectOption(label="استلام التذكرة" if not claimed else "استلام (مستلمة)", value="claim", emoji="📌"),
             discord.SelectOption(label="إلغاء الاستلام", value="unclaim", emoji="🔓"),
+            discord.SelectOption(label="إعادة فتح التذكرة", value="reopen", emoji="🔓"),
             discord.SelectOption(label="نقل التذكرة", value="transfer", emoji="🔄"),
             discord.SelectOption(label="تغيير اسم التذكرة", value="rename", emoji="✏️"),
             discord.SelectOption(label="نداء صاحب التذكرة", value="summon_member", emoji="🔔"),
@@ -421,7 +493,8 @@ class StaffManagementSelect(TicketActionBase):
 class StaffSystemSelect(TicketActionBase):
     def __init__(self, ticket: dict, lang: str = "ar"):
         super().__init__(ticket=ticket, lang=lang, placeholder="⚙️ النظام والأرشيف", options=[
-            discord.SelectOption(label="قفل/فتح (للعضو)", value="lock", emoji="🔐"),
+            discord.SelectOption(label="إعادة فتح التذكرة", value="reopen", emoji="🔓"),
+            discord.SelectOption(label="قفل/فتح (لالعضو)", value="lock", emoji="🔐"),
             discord.SelectOption(label="تعليق/استئناف", value="hold_resume", emoji="⏸️"),
             discord.SelectOption(label="ملاحظة داخلية", value="add_note", emoji="📝"),
             discord.SelectOption(label="سجل العمليات", value="audit_log", emoji="📜"),
