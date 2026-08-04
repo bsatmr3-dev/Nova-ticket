@@ -115,45 +115,48 @@ class TicketActionBase(Select):
             return
 
         if action in ["close", "delete"]:
-            # Bypass for bot owners
-            if not PermissionHandler.is_bot_owner(member.id):
-                # Check if closure info already exists
-                closure_info = db.get_closure_info(ticket.get("id", 0))
-                if not closure_info:
-                    from bot.views.closure_workflow import ClosureWorkflowView
-                    workflow_view = ClosureWorkflowView(ticket.get("id"), action, self.lang)
-                    
-                    # Define what happens after workflow is complete
-                    async def final_callback():
-                        if action == "close":
-                            await self._execute_close(interaction, guild, member, ticket, ticket_user_id)
-                        elif action == "delete":
-                            await self._execute_delete(interaction, guild, member, ticket, ticket_user_id)
-                    
-                    workflow_view.final_callback = final_callback
-                    
-                    embed = EmbedBuilder.create_embed(
-                        title="⚠️ متطلبات إغلاق التذكرة",
-                        description=(
-                            "قبل إغلاق أو حذف هذه التذكرة، يرجى استكمال البيانات التالية:\n\n"
-                            "1️⃣ **صاحب التذكرة:** هل تم حل مشكلتك؟\n"
-                            "2️⃣ **الموظف المستلم:** تحديد نوع العقوبة وإرفاق الأدلة.\n\n"
-                            "⏳ يرجى من صاحب التذكرة البدء بالإجابة أولاً."
-                        ),
-                        color=EmbedBuilder.COLOR_WARNING
-                    )
-                    
-                    # We need to send this as a new message or edit?
-                    # If we defered, we must use followup.
-                    # In process_action, we defer for close/delete if not bot owner? 
-                    # Wait, let's check when defer happens.
-                    
-                    # In the current code, defer happens AFTER the modals check.
-                    # We should handle this before defer.
-                    if not interaction.response.is_done():
-                        return await interaction.response.send_message(embed=embed, view=workflow_view)
-                    else:
-                        return await interaction.followup.send(embed=embed, view=workflow_view)
+            if action == "close" and ticket.get("status") in ["closed", "deleted"]:
+                embed = EmbedBuilder.create_embed(
+                    title="⚠️ التذكرة مغلقة بالفعل",
+                    description="هذه التذكرة مغلقة أو محذوفة بالفعل ولا يمكن إغلاقها مرة أخرى.",
+                    color=EmbedBuilder.COLOR_WARNING
+                )
+                if not interaction.response.is_done():
+                    return await interaction.response.send_message(embed=embed, ephemeral=True)
+                else:
+                    return await interaction.followup.send(embed=embed, ephemeral=True)
+
+            # Check if closure info already exists
+            closure_info = db.get_closure_info(ticket.get("id", 0))
+            if not closure_info:
+                from bot.views.closure_workflow import ClosureWorkflowView
+                workflow_view = ClosureWorkflowView(ticket.get("id"), action, self.lang)
+                
+                # Define what happens after workflow is complete
+                async def final_callback():
+                    if action == "close":
+                        await self._execute_close(interaction, guild, member, ticket, ticket_user_id)
+                    elif action == "delete":
+                        await self._execute_delete(interaction, guild, member, ticket, ticket_user_id)
+                
+                workflow_view.final_callback = final_callback
+                
+                embed = EmbedBuilder.create_embed(
+                    title="⚠️ متطلبات إغلاق التذكرة",
+                    description=(
+                        "قبل إغلاق أو حذف هذه التذكرة، يرجى استكمال البيانات التالية:\n\n"
+                        "1️⃣ **صاحب التذكرة:** تحديد نوع التذكرة والإجابة هل تم التعامل مع الطلب.\n"
+                        "2️⃣ **الموظف المستلم:** تحديد النتيجة وتفاصيل الحيثيات.\n\n"
+                        "⏳ يرجى من صاحب التذكرة البدء بالإجابة أولاً.\n"
+                        "*(ملاحظة: لمالك السيرفر (Owner) فقط زر تخطي الاستبيان عند الحاجة)*"
+                    ),
+                    color=EmbedBuilder.COLOR_WARNING
+                )
+                
+                if not interaction.response.is_done():
+                    return await interaction.response.send_message(embed=embed, view=workflow_view)
+                else:
+                    return await interaction.followup.send(embed=embed, view=workflow_view)
 
         # For other actions, defer immediately to prevent "Application did not respond"
         await interaction.response.defer(ephemeral=True if action in ["info", "audit_log", "toggle_hide"] else False)

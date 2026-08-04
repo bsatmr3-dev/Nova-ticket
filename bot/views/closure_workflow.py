@@ -2,6 +2,7 @@ import discord
 from discord.ui import View, Button, Select, Modal, TextInput
 from bot.database.db import db
 from bot.utils.embeds import EmbedBuilder
+from bot.utils.permissions import PermissionHandler
 from datetime import datetime, timedelta
 import re
 
@@ -137,9 +138,16 @@ class ClosureWorkflowView(View):
         self.add_item(btn_skip)
 
     async def skip_survey_callback(self, interaction: discord.Interaction):
+        is_owner = (
+            interaction.guild and interaction.user.id == interaction.guild.owner_id
+        ) or PermissionHandler.is_bot_owner(interaction.user.id)
+
+        if not is_owner:
+            return await interaction.response.send_message("❌ زر تخطي الاستبيان مخصص فقط لمالك السيرفر (Owner).", ephemeral=True)
+
         self.user_answered = True
         self.staff_answered = True
-        self.staff_details = "تم تخطي الاستبيان"
+        self.staff_details = "تم تخطي الاستبيان بواسطة مالك السيرفر"
 
         db.save_closure_info(
             ticket_id=self.ticket_id,

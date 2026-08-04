@@ -135,34 +135,38 @@ class TicketManagementCog(commands.Cog):
         if not ticket:
             return await interaction.response.send_message("❌ هذه القناة ليست قناة تذكرة صالحة.", ephemeral=True)
 
+        if ticket.get("status") in ["closed", "deleted"]:
+            embed = EmbedBuilder.create_embed(
+                title="⚠️ التذكرة مغلقة بالفعل",
+                description="هذه التذكرة مغلقة أو محذوفة بالفعل ولا يمكن إغلاقها مرة أخرى.",
+                color=EmbedBuilder.COLOR_WARNING
+            )
+            return await interaction.response.send_message(embed=embed, ephemeral=True)
+
         if not await self.check_ticket_state(interaction, ticket, "close"):
             return
 
-        # Check for closure workflow bypass (Bot Owners only)
-        if not PermissionHandler.is_bot_owner(interaction.user.id):
-            closure_info = db.get_closure_info(ticket.get("id", 0))
-            if not closure_info:
-                from bot.views.closure_workflow import ClosureWorkflowView
-                workflow_view = ClosureWorkflowView(ticket.get("id"), "close")
-                
-                async def final_callback():
-                    # This is tricky because we need to trigger the logic again
-                    # But slash commands can't really be re-triggered easily
-                    # We can just call the close logic directly here if we had it extracted
-                    # For now, let's just use the view's embed
-                    pass
+        closure_info = db.get_closure_info(ticket.get("id", 0))
+        if not closure_info:
+            from bot.views.closure_workflow import ClosureWorkflowView
+            workflow_view = ClosureWorkflowView(ticket.get("id"), "close")
+            
+            async def final_callback():
+                pass
 
-                workflow_view.final_callback = final_callback
-                
-                embed = EmbedBuilder.create_embed(
-                    title="⚠️ متطلبات إغلاق التذكرة",
-                    description=(
-                        "يرجى استكمال بيانات الإغلاق أولاً عبر الأزرار في القائمة.\n"
-                        "يجب على صاحب التذكرة والموظف الإجابة على الأسئلة المطلوبة."
-                    ),
-                    color=EmbedBuilder.COLOR_WARNING
-                )
-                return await interaction.response.send_message(embed=embed, view=workflow_view)
+            workflow_view.final_callback = final_callback
+            
+            embed = EmbedBuilder.create_embed(
+                title="⚠️ متطلبات إغلاق التذكرة",
+                description=(
+                    "يرجى استكمال بيانات الإغلاق أولاً عبر الأزرار في القائمة.\n"
+                    "1️⃣ صاحب التذكرة: تحديد نوع التذكرة وهل تم حل الطلب.\n"
+                    "2️⃣ الموظف المستلم: تحديد نتيجة الإجراء والتفاصيل.\n"
+                    "*(ملاحظة: لمالك السيرفر (Owner) فقط زر تخطي الاستبيان عند الحاجة)*"
+                ),
+                color=EmbedBuilder.COLOR_WARNING
+            )
+            return await interaction.response.send_message(embed=embed, view=workflow_view)
 
         guild = interaction.guild
         member = interaction.user
@@ -357,27 +361,26 @@ class TicketManagementCog(commands.Cog):
         if not await self.check_ticket_state(interaction, ticket, "delete"):
             return
 
-        # Check for closure workflow bypass (Bot Owners only)
-        if not PermissionHandler.is_bot_owner(interaction.user.id):
-            closure_info = db.get_closure_info(ticket.get("id", 0))
-            if not closure_info:
-                from bot.views.closure_workflow import ClosureWorkflowView
-                workflow_view = ClosureWorkflowView(ticket.get("id"), "delete")
-                
-                async def final_callback():
-                    pass
+        closure_info = db.get_closure_info(ticket.get("id", 0))
+        if not closure_info:
+            from bot.views.closure_workflow import ClosureWorkflowView
+            workflow_view = ClosureWorkflowView(ticket.get("id"), "delete")
+            
+            async def final_callback():
+                pass
 
-                workflow_view.final_callback = final_callback
-                
-                embed = EmbedBuilder.create_embed(
-                    title="⚠️ متطلبات حذف التذكرة",
-                    description=(
-                        "يرجى استكمال بيانات الإغلاق أولاً عبر الأزرار في القائمة.\n"
-                        "يجب على صاحب التذكرة والموظف الإجابة على الأسئلة المطلوبة قبل الحذف."
-                    ),
-                    color=EmbedBuilder.COLOR_WARNING
-                )
-                return await interaction.response.send_message(embed=embed, view=workflow_view)
+            workflow_view.final_callback = final_callback
+            
+            embed = EmbedBuilder.create_embed(
+                title="⚠️ متطلبات حذف التذكرة",
+                description=(
+                    "يرجى استكمال بيانات الإغلاق أولاً عبر الأزرار في القائمة.\n"
+                    "يجب على صاحب التذكرة والموظف الإجابة على الأسئلة المطلوبة قبل الحذف.\n"
+                    "*(ملاحظة: لمالك السيرفر (Owner) فقط زر تخطي الاستبيان عند الحاجة)*"
+                ),
+                color=EmbedBuilder.COLOR_WARNING
+            )
+            return await interaction.response.send_message(embed=embed, view=workflow_view)
 
         guild = interaction.guild
         member = interaction.user

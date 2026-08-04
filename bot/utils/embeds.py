@@ -73,27 +73,37 @@ class EmbedBuilder:
 
     @staticmethod
     def ticket_welcome_embed(user: discord.Member, category_name: str, lang: str = "ar", guild: Optional[discord.Guild] = None) -> discord.Embed:
-        title = get_text("ticket_welcome_title", lang=lang)
-        desc = get_text("ticket_welcome_desc", lang=lang, user=user.mention)
-        embed = discord.Embed(title=f"🎫 {title} - {category_name}", description=desc, color=EmbedBuilder.COLOR_INFO)
-        
-        # Server icon as author icon at top left (small)
+        server_name = guild.name if guild else "Discord Server"
         server_icon = guild.icon.url if (guild and guild.icon) else None
-        if server_icon:
-            embed.set_author(name=f"🏰 {guild.name}", icon_url=server_icon)
-        else:
-            embed.set_author(name=f"تذكرة العضو: {user.display_name}")
 
-        # Member avatar as thumbnail on the right side (larger than author icon)
+        embed = discord.Embed(
+            title=f"🎫 مرحباً بك في تذكرة الدعم الفني - {category_name}",
+            description=(
+                f"أهلاً بك {user.mention} 👋 في مركز الدعم الفني الخاص بـ **{server_name}**.\n\n"
+                f"يرجى توضيح تفاصيل طلبك أو مشكلتك بالتفصيل وسيقوم أحد أعضاء طاقم الدعم المساعد بتقديم الخدمة لك بأسرع وقت."
+            ),
+            color=EmbedBuilder.COLOR_PRIMARY
+        )
+        
+        if server_icon:
+            embed.set_author(name=f"🏰 {server_name}", icon_url=server_icon)
+        else:
+            embed.set_author(name=f"👤 صاحب التذكرة: {user.display_name}")
+
         embed.set_thumbnail(url=user.display_avatar.url)
         
-        embed.add_field(name="👤 Owner", value=user.mention, inline=True)
-        embed.add_field(name="🏷️ Category", value=category_name, inline=True)
-        embed.add_field(name="📌 Priority", value="Normal", inline=True)
-        embed.add_field(name="📷 إرسال الصور والمرفقات", value="يمكنك إرسال الصور أو اللقطات أو الملفات مباشرة من جهازك في هذه القناة كدليل أو مرفق في أي وقت.", inline=False)
+        embed.add_field(name="👤 صاحب التذكرة / Owner", value=f"{user.mention}\n`({user.id})`", inline=True)
+        embed.add_field(name="🏷️ قسم التذكرة / Category", value=f"`{category_name}`", inline=True)
+        embed.add_field(name="📌 الأولوية / Priority", value="`عادية 🟢`", inline=True)
+        embed.add_field(
+            name="📷 إرسال المرفقات والأدلة",
+            value="يمكنك إرفاق أية صور أو فيديوهات أو ملفات مباشرة هنا في القناة ليتم حفظها كدليل في التذكرة.",
+            inline=False
+        )
 
-        footer_text = f"🏰 {guild.name} • Discord Ticket Bot" if guild else "Discord Advanced Ticket Bot"
+        footer_text = f"🏰 {server_name} • نظام التذاكر المتقدم"
         embed.set_footer(text=footer_text, icon_url=server_icon or user.display_avatar.url)
+        embed.timestamp = discord.utils.utcnow()
         return embed
 
     @staticmethod
