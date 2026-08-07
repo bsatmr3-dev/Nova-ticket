@@ -103,6 +103,8 @@ class TicketActionBase(Select):
                     return await interaction.response.send_message("❌ خيار تقييم الموظف مخصص فقط لصاحب التذكرة!", ephemeral=True)
                 if member.id == ticket.get("claimed_by"):
                     return await interaction.response.send_message("❌ لا يمكنك تقييم نفسك!", ephemeral=True)
+                if db.has_ticket_been_rated(ticket.get("id", 0)):
+                    return await interaction.response.send_message("❌ لقد قمت بتقييم هذه التذكرة بالفعل!", ephemeral=True)
                 await interaction.response.send_modal(RatingModal(ticket, staff_id=ticket.get("claimed_by"), lang=self.lang))
             elif action == "transfer": await interaction.response.send_modal(TransferTicketModal(ticket, self.lang))
             elif action == "priority": await interaction.response.send_modal(ChangePriorityModal(ticket, self.lang))
@@ -277,7 +279,7 @@ class TicketActionBase(Select):
             print(f"Error sending transcript on close: {e}")
 
         staff_id = ticket.get("claimed_by")
-        if owner and ticket_user_id and staff_id and not db.has_ticket_been_rated(ticket.get("id", 0)):
+        if owner and ticket_user_id and staff_id and not db.has_ticket_been_rated(ticket.get("id", 0)) and not db.is_rating_prompt_sent(ticket.get("id", 0)):
             from bot.views.rating_view import RatingView
             try:
                 staff_member = guild.get_member(staff_id)
@@ -301,6 +303,7 @@ class TicketActionBase(Select):
                     color=EmbedBuilder.COLOR_PRIMARY
                 )
                 await owner.send(embed=rating_embed, view=RatingView(ticket['id'], staff_id, self.lang))
+                db.mark_rating_prompt_sent(ticket.get("id", 0))
             except Exception as e:
                 print(f"Error sending rating DM: {e}")
 
@@ -324,7 +327,7 @@ class TicketActionBase(Select):
                 try: owner = await interaction.client.fetch_user(ticket_user_id)
                 except: owner = None
 
-        if owner and staff_id and not db.has_ticket_been_rated(ticket.get("id", 0)):
+        if owner and staff_id and not db.has_ticket_been_rated(ticket.get("id", 0)) and not db.is_rating_prompt_sent(ticket.get("id", 0)):
             from bot.views.rating_view import RatingView
             try:
                 staff_member = guild.get_member(staff_id)
@@ -347,6 +350,7 @@ class TicketActionBase(Select):
                     color=EmbedBuilder.COLOR_PRIMARY
                 )
                 await owner.send(embed=rating_embed, view=RatingView(ticket['id'], staff_id, self.lang))
+                db.mark_rating_prompt_sent(ticket.get("id", 0))
             except Exception as e:
                 print(f"Error sending rating DM on delete: {e}")
 

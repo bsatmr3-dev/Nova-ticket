@@ -195,9 +195,9 @@ class TicketManagementCog(commands.Cog):
         except Exception as e:
             print(f"Error sending transcript on close_ticket: {e}")
 
-        # Send rating DM to owner if ticket was claimed and not previously rated
+        # Send rating DM to owner if ticket was claimed and not previously rated or prompted
         staff_id = ticket.get("claimed_by")
-        if owner and ticket_user_id and staff_id and not db.has_ticket_been_rated(ticket.get("id", 0)):
+        if owner and ticket_user_id and staff_id and not db.has_ticket_been_rated(ticket.get("id", 0)) and not db.is_rating_prompt_sent(ticket.get("id", 0)):
             from bot.views.rating_view import RatingView
             try:
                 staff_member = guild.get_member(staff_id)
@@ -226,6 +226,7 @@ class TicketManagementCog(commands.Cog):
                     color=EmbedBuilder.COLOR_PRIMARY
                 )
                 await owner.send(embed=rating_embed, view=RatingView(ticket['id'], staff_id, lang))
+                db.mark_rating_prompt_sent(ticket.get("id", 0))
             except Exception as e:
                 print(f"Error sending rating DM: {e}")
 
@@ -404,7 +405,7 @@ class TicketManagementCog(commands.Cog):
                     owner = None
 
         staff_id = ticket.get("claimed_by")
-        if owner and ticket_user_id and staff_id and not db.has_ticket_been_rated(ticket.get("id", 0)):
+        if owner and ticket_user_id and staff_id and not db.has_ticket_been_rated(ticket.get("id", 0)) and not db.is_rating_prompt_sent(ticket.get("id", 0)):
             from bot.views.rating_view import RatingView
             try:
                 staff_member = guild.get_member(staff_id)
@@ -432,6 +433,7 @@ class TicketManagementCog(commands.Cog):
                     color=EmbedBuilder.COLOR_PRIMARY
                 )
                 await owner.send(embed=rating_embed, view=RatingView(ticket['id'], staff_id, lang))
+                db.mark_rating_prompt_sent(ticket.get("id", 0))
             except Exception as e:
                 print(f"Error sending rating DM on delete_ticket: {e}")
 

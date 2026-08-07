@@ -343,6 +343,10 @@ class RatingModal(Modal):
         self.add_item(self.feedback_input)
 
     async def on_submit(self, interaction: discord.Interaction):
+        ticket_id = self.ticket.get("id", 0)
+        if db.has_ticket_been_rated(ticket_id):
+            return await interaction.response.send_message("❌ لقد قمت بتقييم هذه التذكرة بالفعل!", ephemeral=True)
+
         try:
             num_stars = int(self.stars_input.value.strip())
             num_stars = max(1, min(5, num_stars))

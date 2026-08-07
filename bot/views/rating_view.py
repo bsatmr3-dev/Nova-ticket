@@ -2,6 +2,7 @@ import discord
 from discord.ui import View, Button, Modal, TextInput
 from bot.database.db import db
 from bot.config.locales import get_text
+from bot.utils.embeds import EmbedBuilder
 
 class FeedbackModal(Modal):
     def __init__(self, ticket_id: int, staff_id: int, stars: int, lang: str = "ar"):
@@ -23,6 +24,11 @@ class FeedbackModal(Modal):
     async def on_submit(self, interaction: discord.Interaction):
         try:
             if db.has_ticket_been_rated(self.ticket_id):
+                if interaction.message:
+                    try:
+                        await interaction.message.delete()
+                    except Exception:
+                        pass
                 return await interaction.response.send_message("❌ لقد قمت بتقييم هذه التذكرة بالفعل!", ephemeral=True)
 
             feedback_text = self.comment.value.strip() if self.comment.value else "بدون تعليق"
@@ -48,11 +54,27 @@ class FeedbackModal(Modal):
                 db.update_staff_points(guild_id, self.staff_id, awarded_points)
                 db.add_staff_rating_stat(guild_id, self.staff_id, self.stars)
 
-            pts_sign = f"+{awarded_points}" if awarded_points >= 0 else f"{awarded_points}"
-            await interaction.response.send_message(
-                f"⭐ **شكراً جزيلاً لتقييمك!**\nتم تسجيل تقييمك `{self.stars}/5 ★` بنجاح وإضافة `{pts_sign}` نقطة لرصيد الموظف <@{self.staff_id}>.",
-                ephemeral=True
+            # Try deleting the original rating request message (with the 5 star buttons)
+            if interaction.message:
+                try:
+                    await interaction.message.delete()
+                except Exception as del_err:
+                    print(f"Could not delete rating prompt message: {del_err}")
+
+            thank_you_embed = EmbedBuilder.create_embed(
+                title="⭐ شكراً جزيلاً لتقييمك!",
+                description=(
+                    f"مرحباً {interaction.user.mention} 👋،\n"
+                    f"تم تسجيل تقييمك بنجاح بـ **`{self.stars}/5 ★`**.\n\n"
+                    f"شكراً لوقتك وملاحظاتك القيمة لتطوير مستوى خدمة الدعم الفني! ❤️"
+                ),
+                color=EmbedBuilder.COLOR_SUCCESS
             )
+
+            if not interaction.response.is_done():
+                await interaction.response.send_message(embed=thank_you_embed, ephemeral=False)
+            else:
+                await interaction.followup.send(embed=thank_you_embed, ephemeral=False)
         except Exception as e:
             if not interaction.response.is_done():
                 await interaction.response.send_message(f"❌ حدث خطأ أثناء حفظ التقييم: {e}", ephemeral=True)
@@ -79,9 +101,15 @@ class RatingView(View):
     def make_callback(self, stars: int):
         async def callback(interaction: discord.Interaction):
             if db.has_ticket_been_rated(self.ticket_id):
+                if interaction.message:
+                    try:
+                        await interaction.message.delete()
+                    except Exception:
+                        pass
                 return await interaction.response.send_message("❌ لقد قمت بتقييم هذه التذكرة بالفعل!", ephemeral=True)
             
             modal = FeedbackModal(ticket_id=self.ticket_id, staff_id=self.staff_id, stars=stars, lang=self.lang)
             await interaction.response.send_modal(modal)
         return callback
+
 

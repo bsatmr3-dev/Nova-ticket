@@ -325,6 +325,9 @@ class DatabaseManager:
                     timeout_duration {int_type} DEFAULT 0,
                     created_at {text_type} NOT NULL
                 )""",
+                f"""CREATE TABLE IF NOT EXISTS rating_prompts_sent (
+                    ticket_id {int_type} PRIMARY KEY
+                )""",
                 f"""CREATE TABLE IF NOT EXISTS user_infractions (
                     id {pk_type},
                     guild_id BIGINT NOT NULL,
@@ -658,8 +661,12 @@ class DatabaseManager:
         VALUES (?, ?, ?, ?, ?, ?)
         """, (ticket_id, user_id, staff_id, stars, feedback, datetime.utcnow().isoformat()))
 
-    def has_ticket_been_rated(self, ticket_id: int) -> bool:
-        res = self._run_query("SELECT 1 FROM ratings WHERE ticket_id = ?", (ticket_id,), fetch="one")
+    def has_ticket_been_rated(self, ticket_id: Any) -> bool:
+        try:
+            t_id = int(ticket_id)
+        except (ValueError, TypeError):
+            t_id = ticket_id
+        res = self._run_query("SELECT 1 FROM ratings WHERE ticket_id = ? OR ticket_id = ?", (t_id, str(t_id)), fetch="one")
         return res is not None
 
     def save_closure_info(self, ticket_id: int, **kwargs):
@@ -693,8 +700,30 @@ class DatabaseManager:
             datetime.utcnow().isoformat()
         ))
 
-    def get_closure_info(self, ticket_id: int) -> Optional[Dict[str, Any]]:
-        return self._run_query("SELECT * FROM closure_info WHERE ticket_id = ?", (ticket_id,), fetch="one")
+    def get_closure_info(self, ticket_id: Any) -> Optional[Dict[str, Any]]:
+        try:
+            t_id = int(ticket_id)
+        except (ValueError, TypeError):
+            t_id = ticket_id
+        return self._run_query("SELECT * FROM closure_info WHERE ticket_id = ? OR ticket_id = ?", (t_id, str(t_id)), fetch="one")
+
+    def is_rating_prompt_sent(self, ticket_id: Any) -> bool:
+        try:
+            t_id = int(ticket_id)
+        except (ValueError, TypeError):
+            t_id = ticket_id
+        res = self._run_query("SELECT 1 FROM rating_prompts_sent WHERE ticket_id = ? OR ticket_id = ?", (t_id, str(t_id)), fetch="one")
+        return res is not None
+
+    def mark_rating_prompt_sent(self, ticket_id: Any):
+        try:
+            t_id = int(ticket_id)
+        except (ValueError, TypeError):
+            t_id = ticket_id
+        if self._db_type == "postgres":
+            self._run_query("INSERT INTO rating_prompts_sent (ticket_id) VALUES (?) ON CONFLICT DO NOTHING", (t_id,))
+        else:
+            self._run_query("INSERT OR IGNORE INTO rating_prompts_sent (ticket_id) VALUES (?)", (t_id,))
 
     # --- User Infractions & Warnings ---
     def add_infraction(self, guild_id: int, user_id: int, infraction_type: str, reason: str, duration_minutes: int, executor_id: int, ticket_id: int) -> int:
